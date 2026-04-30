@@ -642,7 +642,7 @@ export default function App() {
                   <div className="section-title" style={{ marginBottom:0 }}>Rapport état départ</div>
                   <div style={{ display:"flex", gap:8 }}>
                     <button className="btn btn-outline btn-sm no-print" onClick={() => window.print()}>⬇ PDF</button>
-                    <button className="btn btn-gold" onClick={async () => { await saveDepart(); goHome(); }}>✓ Valider & sauvegarder</button>
+                    <button className="btn btn-gold" onClick={async () => { await saveDepart(); goHome(); }} disabled={!depForm.immat}>✓ Valider & sauvegarder</button>
                   </div>
                 </div>
                 <div className="card" style={{ marginBottom:10 }}>
@@ -653,7 +653,13 @@ export default function App() {
                   </div>
                 </div>
                 {zones.map(zone => {
-                  const z = depZones[zone.id]; const photos = depPhotos[zone.id]||[];
+                  const z = depZones[zone.id];
+                  const photos = depPhotos[zone.id]||[];
+                  // Pour tour_complet : récupérer toutes les photos des 4 angles
+                  const tourPhotos = zone.id === "tour_complet"
+                    ? TOUR_ANGLES.map(a => ({ angle: a, photo: depPhotos[`tour_complet_${a.key}`]?.[0] })).filter(x => x.photo)
+                    : [];
+                  const hasPhotos = zone.id === "tour_complet" ? tourPhotos.length > 0 : photos.length > 0;
                   return (
                     <div key={zone.id} style={{ marginBottom:5, border:"1px solid var(--border)", padding:"10px 14px", background:"var(--bg2)" }}>
                       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
@@ -663,11 +669,25 @@ export default function App() {
                           {z?.note && <span style={{ fontSize:12, color:"var(--muted)" }}>— {z.note}</span>}
                         </div>
                         <div style={{ display:"flex", gap:8 }}>
-                          {photos.length > 0 && <span className="badge badge-ok">{photos.length} photo{photos.length>1?"s":""}</span>}
-                          {z?.etat ? <span className="etat-tag" style={{ background:ETAT_COLORS[z.etat]+"22", color:ETAT_COLORS[z.etat], border:`1px solid ${ETAT_COLORS[z.etat]}44` }}>{z.etat}</span> : <span style={{ fontSize:11, color:"var(--muted)" }}>Non renseigné</span>}
+                          {hasPhotos && <span className="badge badge-ok">{zone.id === "tour_complet" ? tourPhotos.length : photos.length} photo{(zone.id === "tour_complet" ? tourPhotos.length : photos.length)>1?"s":""}</span>}
+                          {z?.etat ? <span className="etat-tag" style={{ background:ETAT_COLORS[z.etat]+"22", color:ETAT_COLORS[z.etat], border:`1px solid ${ETAT_COLORS[z.etat]}44` }}>{z.etat}</span> : <span style={{ fontSize:11, color:"var(--muted)" }}>{zone.id === "tour_complet" ? "" : "Non renseigné"}</span>}
                         </div>
                       </div>
-                      {photos.length > 0 && <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginTop:8 }}>{photos.map((p,i) => <img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>}
+                      {zone.id === "tour_complet" && tourPhotos.length > 0 && (
+                        <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginTop:10 }}>
+                          {tourPhotos.map(({angle, photo}) => (
+                            <div key={angle.key} style={{ textAlign:"center" }}>
+                              <img src={photo.url} alt="" className="photo-thumb"/>
+                              <div style={{ fontSize:9, color:"var(--muted)", marginTop:3, letterSpacing:0.5 }}>{angle.label}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {zone.id !== "tour_complet" && photos.length > 0 && (
+                        <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginTop:8 }}>
+                          {photos.map((p,i) => <img key={i} src={p.url} alt="" className="photo-thumb"/>)}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
