@@ -180,9 +180,52 @@ function pickFile(opts = {}) {
   });
 }
 
+// ─── COMPRESSION IMAGE ────────────────────────────────────────────────────────
+async function compressBase64(base64, maxW = 800, quality = 0.7) {
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const ratio = Math.min(maxW / img.width, maxW / img.height, 1);
+      canvas.width = img.width * ratio;
+      canvas.height = img.height * ratio;
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      res(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.src = base64;
+  });
+}
+
+async function compressPhotos(photos) {
+  if (!photos) return photos;
+  const result = {};
+  for (const key of Object.keys(photos)) {
+    const arr = photos[key];
+    if (!Array.isArray(arr)) continue;
+    result[key] = await Promise.all(arr.map(async p => ({
+      ...p,
+      url: p.url?.startsWith("data:") ? await compressBase64(p.url) : p.url
+    })));
+  }
+  return result;
+}
+
 // ─── FIREBASE HELPERS ─────────────────────────────────────────────────────────
 async function fbSaveDossier(data) {
-  await setDoc(doc(db, "dossiers", data.immat), data);
+  try {
+    // Compresser les photos avant envoi Firebase
+    const compressed = { ...data };
+    if (compressed.depart?.photos) {
+      compressed.depart = { ...compressed.depart, photos: await compressPhotos(compressed.depart.photos) };
+    }
+    if (compressed.retour?.photos) {
+      compressed.retour = { ...compressed.retour, photos: await compressPhotos(compressed.retour.photos) };
+    }
+    await setDoc(doc(db, "dossiers", compressed.immat), compressed);
+  } catch(e) {
+    console.error("Firebase save error:", e);
+    alert("Erreur de sauvegarde : " + e.message);
+  }
 }
 async function fbSaveConfig(id, data) {
   await setDoc(doc(db, "config", id), data);
