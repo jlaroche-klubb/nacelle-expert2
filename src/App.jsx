@@ -247,13 +247,29 @@ async function analyzeWithClaude(depPhotos, retPhotos, zoneName, tarifs, zoneId)
 
   const content = [];
 
+  // Compresser les photos pour IA (max 400px)
+  async function shrinkForAI(url) {
+    return new Promise(res => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const ratio = Math.min(400 / img.width, 400 / img.height, 1);
+        canvas.width = img.width * ratio;
+        canvas.height = img.height * ratio;
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        res(canvas.toDataURL("image/jpeg", 0.5));
+      };
+      img.src = url;
+    });
+  }
+
   if (depPhotos?.length) {
     content.push({ type: "text", text: `PHOTOS ÉTAT DÉPART — Zone: ${zoneName}` });
-    depPhotos.slice(0,3).forEach(p => content.push(buildImgBlock(p.url)));
+    for (const p of depPhotos.slice(0,2)) { const s = await shrinkForAI(p.url); content.push(buildImgBlock(s)); }
   }
   if (retPhotos?.length) {
     content.push({ type: "text", text: `PHOTOS ÉTAT RETOUR — Zone: ${zoneName}` });
-    retPhotos.slice(0,3).forEach(p => content.push(buildImgBlock(p.url)));
+    for (const p of retPhotos.slice(0,2)) { const s = await shrinkForAI(p.url); content.push(buildImgBlock(s)); }
   }
 
   content.push({
