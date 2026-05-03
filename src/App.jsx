@@ -28,24 +28,97 @@ const DEFAULT_ZONES = [
 ];
 
 const DEFAULT_TARIFS = [
-  { id: "rayure_legere", zone: "capots", label: "Rayure légère carrosserie", prix: 80 },
-  { id: "rayure_profonde", zone: "capots", label: "Rayure profonde carrosserie", prix: 180 },
-  { id: "bosse", zone: "capots", label: "Bosse / enfoncement", prix: 280 },
-  { id: "capot_casse", zone: "capots", label: "Capot cassé / fendu", prix: 450 },
-  { id: "jante_rayee", zone: "roues", label: "Jante rayée", prix: 90 },
-  { id: "pneu_degrade", zone: "roues", label: "Pneu dégradé / crevé", prix: 220 },
-  { id: "roue_voilee", zone: "roues", label: "Roue voilée", prix: 350 },
-  { id: "bras_rayure", zone: "bras", label: "Rayure sur bras/flèche", prix: 150 },
-  { id: "bras_plie", zone: "bras", label: "Bras plié / déformé", prix: 1200 },
-  { id: "verin_fuite", zone: "verin", label: "Fuite vérin hydraulique", prix: 380 },
-  { id: "verin_casse", zone: "verin", label: "Vérin cassé", prix: 850 },
-  { id: "cable_abime", zone: "electrique", label: "Câble électrique abîmé", prix: 120 },
-  { id: "connecteur_casse", zone: "electrique", label: "Connecteur cassé", prix: 90 },
-  { id: "securite_hs", zone: "securite", label: "Sécurité neutralisée / HS", prix: 300 },
-  { id: "plateforme_deforme", zone: "plateforme", label: "Plateforme déformée", prix: 600 },
-  { id: "garde_corps", zone: "plateforme", label: "Garde-corps endommagé", prix: 250 },
-  { id: "tourelle_choc", zone: "tourelle", label: "Choc sur tourelle", prix: 400 },
-  { id: "stabilo_tord", zone: "cabrage", label: "Stabilisateur tordu", prix: 320 },
+  // ── CARROSSERIE ──
+  { id: "deformation_100", zone: "capots", label: "Déformations > 100 cm²", prix: null, surDevis: true },
+  { id: "dechirure_5", zone: "capots", label: "Déchirures, cassures, fissures > 5 cm", prix: null, surDevis: true },
+  { id: "depot_200", zone: "capots", label: "Dépôts industriels/chimiques > 200 cm²", prix: null, surDevis: true },
+  { id: "rayure_oxydation", zone: "capots", label: "Rayures avec oxydation", prix: null, surDevis: true },
+  { id: "sinistre", zone: "capots", label: "Dommages non réparés suite à sinistre", prix: null, surDevis: true },
+
+  // ── MOULURES DE PROTECTION ──
+  { id: "pare_choc_avant", zone: "capots", label: "Pare-choc avant — cassé ou rayure profonde", prix: 470 },
+  { id: "plaque_immat", zone: "capots", label: "Plaque immatriculation", prix: 18 },
+  { id: "lisse_protection", zone: "capots", label: "Lisse de protection / obturateur", prix: 110 },
+  { id: "pare_choc_arriere", zone: "capots", label: "Pare-choc arrière — cassé ou rayure profonde", prix: 590 },
+  { id: "passage_roue", zone: "roues", label: "Passage de roue — cassé ou absent", prix: 216 },
+  { id: "protection_carter", zone: "moteur", label: "Protection de carter moteur — cassé ou absent", prix: 390 },
+
+  // ── RÉTROVISEURS ──
+  { id: "retroviseur", zone: "capots", label: "Miroir / coque / clignotant — cassé", prix: 350 },
+
+  // ── PARE-BRISE / VITRES ──
+  { id: "fissure_pare_brise", zone: "capots", label: "Fissure pare-brise — remplacement", prix: 650 },
+  { id: "eclat_pare_brise", zone: "capots", label: "Éclat + impact (si réparable)", prix: 90 },
+
+  // ── OPTIQUES PORTEUR ──
+  { id: "phare_avant", zone: "electrique", label: "Phare avant — cassé ou rayure profonde", prix: 450 },
+  { id: "feu_position_lateral", zone: "electrique", label: "Feu de position latéral", prix: 36 },
+  { id: "feu_stop_panier", zone: "electrique", label: "Feu stop sur panier 12V", prix: 450 },
+  { id: "feu_arriere", zone: "electrique", label: "Feu arrière — cassé ou rayure profonde", prix: 180 },
+
+  // ── ROUES ──
+  { id: "jante_deformation", zone: "roues", label: "Jantes — déformations, enlèvement matière", prix: 150 },
+  { id: "pneumatiques", zone: "roues", label: "Pneumatiques par paire — usure > 50%", prix: 300 },
+  { id: "roue_secours", zone: "roues", label: "Roue de secours — absente ou inutilisable", prix: 250 },
+  { id: "cric", zone: "roues", label: "Cric — absent ou non complet", prix: 150 },
+
+  // ── ÉTAT INTÉRIEUR ──
+  { id: "tapis_sol", zone: "cabrage", label: "Tapis de sol — déchiré > 10 cm", prix: 630 },
+  { id: "sieges", zone: "cabrage", label: "Sièges — brûlure, déchiré, trou", prix: 175 },
+  { id: "etagere", zone: "cabrage", label: "Étagère — cassée", prix: 170 },
+  { id: "autoradio", zone: "electrique", label: "Autoradio — cassé ou manquant", prix: 450 },
+  { id: "poignees", zone: "capots", label: "Poignées — cassées", prix: 140 },
+  { id: "barlillet", zone: "securite", label: "Barillet / Neiman / bouchon réservoir — forcé", prix: 270 },
+  { id: "plancher_fourgon", zone: "plateforme", label: "Plancher fourgon arrière", prix: 270 },
+  { id: "parois_cloisons", zone: "plateforme", label: "Parois et cloisons — défaut nuisant utilisation", prix: 485 },
+  { id: "meuble_etagere", zone: "plateforme", label: "Meuble établi ou étagère — cassé ou tordu", prix: 600 },
+  { id: "bac", zone: "plateforme", label: "Bac — cassé ou manquant", prix: 8 },
+
+  // ── PARTIE NACELLE ──
+  { id: "feu_antibrou", zone: "securite", label: "Feu antibrouillard/recul/stop/clignotant/éclaireur plaque/gabarit", prix: 197 },
+  { id: "feu_gabarit_coude", zone: "securite", label: "Feux de gabarit coudé droit", prix: 127 },
+  { id: "crochet_attelage", zone: "bras", label: "Crochet d'attelage", prix: 261 },
+  { id: "prise_attelage", zone: "electrique", label: "Prise d'attelage", prix: 200 },
+  { id: "tige_gabarit", zone: "securite", label: "Tige gabarit", prix: 109 },
+  { id: "gyrophare", zone: "electrique", label: "Gyrophare", prix: 205 },
+  { id: "bras_portillon", zone: "bras", label: "Bras de portillon", prix: 229 },
+  { id: "manipulateur_haut", zone: "bras", label: "Manipulateur poste haut", prix: 189 },
+  { id: "variateur_haut", zone: "bras", label: "Variateur poste haut", prix: 450 },
+  { id: "gyrophare_bras", zone: "bras", label: "Gyrophare / bras portillon / manipulateur poste", prix: 140 },
+  { id: "triflash", zone: "securite", label: "Triflash", prix: 390 },
+  { id: "panier", zone: "plateforme", label: "Panier — cassé/tordu", prix: null, surDevis: true },
+  { id: "protection_poste_haut", zone: "plateforme", label: "Protection de poste haut", prix: 268 },
+  { id: "tole_alu", zone: "plateforme", label: "Tôle ALU X62 — cassé/tordu", prix: 856 },
+  { id: "plateforme_nacelle", zone: "plateforme", label: "Plateforme — cassé/tordu", prix: null, surDevis: true },
+  { id: "carter_protection", zone: "bras", label: "Carter de protection nacelle", prix: 365 },
+  { id: "porte_echelle", zone: "bras", label: "Porte échelle", prix: 1808 },
+  { id: "soufflet_variateur", zone: "verin", label: "Soufflet variateur de vitesse", prix: 104 },
+  { id: "eclaireur_plaque_led", zone: "electrique", label: "Éclaireur plaque LED 12/24V", prix: 130 },
+  { id: "verrouillage_portillon", zone: "securite", label: "Verrouillage portillon KLUBB", prix: 162 },
+  { id: "variateur_vitesse", zone: "verin", label: "Ensemble variateur de vitesse", prix: 368 },
+  { id: "arret_urgence", zone: "securite", label: "Arrêt d'urgence", prix: 128 },
+  { id: "commutateur_rotatif", zone: "electrique", label: "Commutateur rotatif couleur 12V", prix: 99 },
+  { id: "kit_etiquette", zone: "securite", label: "Kit étiquette", prix: 125 },
+
+  // ── NETTOYAGE ──
+  { id: "forfait_nettoyage", zone: "cabrage", label: "Forfait nettoyage", prix: 120 },
+  { id: "enlevement_dechets", zone: "cabrage", label: "Forfait enlèvement des déchets", prix: 240 },
+  { id: "manuel_utilisation", zone: "securite", label: "Manuel d'utilisation — manquant", prix: 60 },
+  { id: "nettoyage_interieur", zone: "cabrage", label: "Nettoyage intérieur", prix: 100 },
+  { id: "nettoyage_exterieur", zone: "cabrage", label: "Nettoyage extérieur", prix: 70 },
+];
+
+const VETUSTE = [
+  { annee: 1, taux: 0 },
+  { annee: 2, taux: 0 },
+  { annee: 3, taux: -20 },
+  { annee: 4, taux: -25 },
+  { annee: 5, taux: -30 },
+  { annee: 6, taux: -35 },
+  { annee: 7, taux: -40 },
+  { annee: 8, taux: -45 },
+  { annee: 9, taux: -50 },
+  { annee: 10, taux: -55 },
 ];
 
 const ETAT_OPTIONS = ["Bon état", "Usure normale", "Dégradé", "Endommagé", "Manquant"];
@@ -181,7 +254,7 @@ export default function App() {
   const [tarifEdit,setTarifEdit]=useState(null);
 
   // Départ
-  const [depForm,setDepForm]=useState({immat:"",type_nacelle:"",modele:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});
+  const [depForm,setDepForm]=useState({immat:"",type_nacelle:"",modele:"",client:"",contrat:"",email:"",date:todayISO(),annee_fab:"",heures:"",km_porteur:"",agent:""});
   const [depZones,setDepZones]=useState({});
   const [depPhotos,setDepPhotos]=useState({});
   const [depStep,setDepStep]=useState(0);
@@ -264,7 +337,14 @@ export default function App() {
   async function deleteTarif(idx) { const updated=tarifs.filter((_,i)=>i!==idx); setTarifs(updated); await fbSaveConfig("tarifs",{data:updated}); flash("Poste supprimé ✓"); }
   function flash(msg) { setAdminMsg(msg); setTimeout(()=>setAdminMsg(""),2500); }
 
-  const totalRetenue=retDegats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);return s+(t?t.prix:0);},0);
+  const getVetuste = (annee_fab) => {
+    if (!annee_fab) return 0;
+    const age = new Date().getFullYear() - parseInt(annee_fab);
+    const v = VETUSTE.find(v => v.annee === Math.min(age, 10));
+    return v ? v.taux : (age >= 10 ? -55 : 0);
+  };
+  const vetusteTaux = foundDossier ? getVetuste(foundDossier.info?.annee_fab) : 0;
+  const totalRetenue=retDegats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||!t.prix) return s; const prix=t.prix*(1+vetusteTaux/100); return s+Math.round(prix);},0);
   const filteredDossiers=Object.values(dossiers).filter(d=>!searchQ||[d.immat,d.info?.client,d.info?.contrat].some(v=>v?.toLowerCase().includes(searchQ.toLowerCase())));
 
   function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false); }
@@ -287,7 +367,7 @@ export default function App() {
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={()=>{setAdminOpen(true);setAdminAuthed(false);setAdminPwd("");}}>⚙</button>
           {view==="home"&&<>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>Expertise Retour</button>
-            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",type_nacelle:"",modele:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});setDepZones({});setDepPhotos({});}}>+ Nouveau départ</button>
+            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",type_nacelle:"",modele:"",client:"",contrat:"",email:"",date:todayISO(),annee_fab:"",heures:"",km_porteur:"",agent:""});setDepZones({});setDepPhotos({});}}>+ Nouveau départ</button>
           </>}
         </div>
       </div>
@@ -349,6 +429,9 @@ export default function App() {
                   </div>
                   <div className="g2" style={{marginBottom:12}}>
                     <div><label>Modèle</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
+                    <div><label>Année fabrication</label><input type="number" value={depForm.annee_fab} onChange={e=>setDepForm({...depForm,annee_fab:e.target.value})} placeholder="2019"/></div>
+                  </div>
+                  <div className="g2" style={{marginBottom:12}}>
                     <div><label>N° Contrat</label><input value={depForm.contrat} onChange={e=>setDepForm({...depForm,contrat:e.target.value})} placeholder="CTR-2024-055"/></div>
                   </div>
                   <div className="g2" style={{marginBottom:12}}>
@@ -538,6 +621,7 @@ export default function App() {
             {retStep===1&&foundDossier&&(
               <div>
                 <div className="section-title">État retour — zone par zone</div>
+                {vetusteTaux!==0&&<div style={{padding:"8px 14px",background:"rgba(200,16,46,.06)",border:"1px solid rgba(200,16,46,.2)",fontSize:12,color:"var(--accent)",marginBottom:10}}>⚖ Taux de vétusté appliqué : {vetusteTaux}% (nacelle de {foundDossier.info?.annee_fab||"?"} — {new Date().getFullYear()-parseInt(foundDossier.info?.annee_fab||new Date().getFullYear())} an{new Date().getFullYear()-parseInt(foundDossier.info?.annee_fab||new Date().getFullYear())>1?"s":""})</div>}
                 {zones.map(zone=>{
                   const depZ=foundDossier.depart?.zones?.[zone.id];
                   const depP=foundDossier.depart?.photos?.[zone.id]||[];
@@ -611,7 +695,14 @@ export default function App() {
                                         <div style={{width:16,height:16,border:`2px solid ${retDegats.includes(t.id)?"var(--primary)":"var(--border2)"}`,background:retDegats.includes(t.id)?"var(--primary)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",flexShrink:0}}>{retDegats.includes(t.id)?"✓":""}</div>
                                         <span style={{fontSize:13}}>{t.label}</span>
                                       </div>
-                                      <span className="mono" style={{color:"var(--primary)",fontSize:13,fontWeight:700}}>{t.prix} €</span>
+                                      {t.surDevis ? (
+                                        <span style={{fontSize:11,color:"var(--accent)",fontWeight:700,fontFamily:"monospace"}}>SUR DEVIS</span>
+                                      ) : (
+                                        <div style={{textAlign:"right"}}>
+                                          <span className="mono" style={{color:"var(--primary)",fontSize:13,fontWeight:700}}>{t.prix?Math.round(t.prix*(1+vetusteTaux/100)):0} €</span>
+                                          {vetusteTaux!==0&&t.prix&&<div style={{fontSize:9,color:"var(--muted)"}}>{t.prix}€ {vetusteTaux>0?"+":""}{vetusteTaux}%</div>}
+                                        </div>
+                                      )}
                                     </div>
                                   ))}
                                 </div>
