@@ -20,7 +20,7 @@ const DEFAULT_ZONES = [
   { id: "plateforme", label: "Plateforme / Panier", icon: "▭" },
   { id: "moteur", label: "Moteur / Groupe", icon: "⚙" },
   { id: "roues", label: "Roues / Chenilles", icon: "○" },
-  { id: "capots", label: "Capots / Carrosimmat", icon: "◻" },
+  { id: "capots", label: "Capots / Carrosserie", icon: "◻" },
   { id: "tourelle", label: "Tourelle / Pivot", icon: "↻" },
   { id: "verin", label: "Vérins / Hydraulique", icon: "⇕" },
   { id: "cabrage", label: "Stabilisateurs / Lests", icon: "⊥" },
@@ -273,7 +273,7 @@ Réponds UNIQUEMENT en JSON (sans markdown) avec ce format exact :
 }`
   });
 
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+  const resp = await fetch("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
