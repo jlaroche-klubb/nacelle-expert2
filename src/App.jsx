@@ -220,6 +220,8 @@ export default function App() {
   const [tarifs,setTarifs]=useState(DEFAULT_TARIFS);
   const [loading,setLoading]=useState(true);
   const [searchQ,setSearchQ]=useState("");
+  const [filterStatut,setFilterStatut]=useState("tous"); // tous | location | retour | sans_depart
+  const [showStats,setShowStats]=useState(false);
   const [activeDossier,setActiveDossier]=useState(null);
   const [adminOpen,setAdminOpen]=useState(false);
   const [adminAuthed,setAdminAuthed]=useState(false);
@@ -304,7 +306,11 @@ export default function App() {
 
   const vetusteTaux = foundDossier ? getVetuste(foundDossier.info?.annee_fab) : 0;
   const totalRetenue = retDegats.reduce((s,id)=>{ const t=tarifs.find(t=>t.id===id); if(!t||t.surDevis||!t.prix) return s; return s+prixAvecVetuste(t.prix,vetusteTaux); },0);
-  const filteredDossiers = Object.values(dossiers).filter(d=>!searchQ||[d.immat,d.info?.client,d.info?.contrat].some(v=>v?.toLowerCase?.().includes(searchQ.toLowerCase())));
+  const filteredDossiers = Object.values(dossiers).filter(d=>{
+    const matchQ = !searchQ||[d.immat,d.info?.client,d.info?.contrat].some(v=>v?.toLowerCase?.().includes(searchQ.toLowerCase()));
+    const matchStatut = filterStatut==="tous" || (filterStatut==="retour"&&d.retour) || (filterStatut==="location"&&!d.retour&&!d.depart?.sansDossier) || (filterStatut==="sans_depart"&&d.depart?.sansDossier&&!d.retour);
+    return matchQ && matchStatut;
+  });
 
   function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false); }
 
@@ -342,8 +348,70 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <div className="section-title">Dossiers</div>
+            {/* STATS */}
+            {showStats&&(
+              <div className="card fade-in" style={{marginBottom:18}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                  <div className="section-title" style={{marginBottom:0}}>Statistiques</div>
+                  <button className="btn btn-icon" onClick={()=>setShowStats(false)}>✕</button>
+                </div>
+                {(()=>{
+                  const tous=Object.values(dossiers);
+                  const avecRetour=tous.filter(d=>d.retour);
+                  const tousDegatIds=avecRetour.flatMap(d=>d.retour?.degats||[]);
+                  const montants=avecRetour.map(d=>{const vt=getVetuste(d.info?.annee_fab);return (d.retour?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix)return s;return s+prixAvecVetuste(t.prix,vt);},0);});
+                  const totalGlobal=montants.reduce((s,m)=>s+m,0);
+                  const moyenneRetenue=avecRetour.length?Math.round(totalGlobal/avecRetour.length):0;
+                  const freqDegats=tousDegatIds.reduce((acc,id)=>{acc[id]=(acc[id]||0)+1;return acc;},{});
+                  const top5=Object.entries(freqDegats).sort((a,b)=>b[1]-a[1]).slice(0,5);
+                  return (
+                    <div>
+                      <div className="g3" style={{marginBottom:16}}>
+                        {[["Dossiers total",tous.length,"var(--primary)"],["Retours traités",avecRetour.length,"var(--ok)"],["Retenue totale",totalGlobal.toLocaleString("fr-FR")+" €","var(--accent)"],["Retenue moyenne",moyenneRetenue.toLocaleString("fr-FR")+" €","var(--primary)"],["En location",tous.filter(d=>!d.retour).length,"#9a8a2a"],["Taux retour",tous.length?Math.round(avecRetour.length/tous.length*100)+"%":"—","var(--ok)"]].map(([l,v,c])=>(
+                          <div key={l} style={{textAlign:"center",padding:"12px 8px",border:"1px solid var(--border)",background:"#f8f9fb"}}>
+                            <div style={{fontFamily:"'Share Tech Mono'",fontSize:22,color:c,fontWeight:700}}>{v}</div>
+                            <div style={{fontSize:10,letterSpacing:1.5,color:"var(--muted)",textTransform:"uppercase",marginTop:4}}>{l}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {top5.length>0&&(
+                        <div>
+                          <div style={{fontSize:10,letterSpacing:3,color:"var(--primary)",textTransform:"uppercase",marginBottom:10,fontWeight:700}}>Top 5 dégâts les plus fréquents</div>
+                          {top5.map(([id,count],i)=>{
+                            const t=tarifs.find(t=>t.id===id);
+                            const pct=Math.round(count/avecRetour.length*100);
+                            return (
+                              <div key={id} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
+                                <div style={{width:20,height:20,background:"var(--primary)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0}}>{i+1}</div>
+                                <div style={{flex:1}}>
+                                  <div style={{fontSize:13,marginBottom:3}}>{t?.label||id}</div>
+                                  <div style={{height:6,background:"var(--border)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:pct+"%",background:"var(--primary)",borderRadius:3}}/></div>
+                                </div>
+                                <div style={{fontSize:12,color:"var(--primary)",fontWeight:700,minWidth:60,textAlign:"right"}}>{count}× ({pct}%)</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {top5.length===0&&<div style={{fontSize:13,color:"var(--muted)",textAlign:"center",padding:20}}>Pas encore de données de retour disponibles.</div>}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <div className="section-title" style={{marginBottom:0}}>Dossiers</div>
+              <button className="btn btn-outline btn-sm" onClick={()=>setShowStats(!showStats)}>{showStats?"Masquer":"📊 Statistiques"}</button>
+            </div>
             <input placeholder="Rechercher immatriculation, client, contrat..." value={searchQ} onChange={e=>setSearchQ(e.target.value)} style={{marginBottom:10}}/>
+            <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+              {[["tous","Tous",Object.values(dossiers).length],["location","En location",Object.values(dossiers).filter(d=>!d.retour&&!d.depart?.sansDossier).length],["retour","Retour traité",Object.values(dossiers).filter(d=>d.retour).length],["sans_depart","Sans départ",Object.values(dossiers).filter(d=>d.depart?.sansDossier&&!d.retour).length]].map(([val,label,count])=>(
+                <button key={val} onClick={()=>setFilterStatut(val)} style={{padding:"5px 12px",border:`1px solid ${filterStatut===val?"var(--primary)":"var(--border2)"}`,background:filterStatut===val?"var(--primary)":"#fff",color:filterStatut===val?"#fff":"var(--text)",fontSize:12,fontWeight:filterStatut===val?700:500,cursor:"pointer",fontFamily:"inherit",borderRadius:2,transition:"all .15s"}}>
+                  {label} <span style={{opacity:.7}}>({count})</span>
+                </button>
+              ))}
+            </div>
             {loading&&<div style={{textAlign:"center",color:"var(--muted)",padding:40}}>Connexion Firebase...</div>}
             {!loading&&filteredDossiers.length===0&&<div style={{textAlign:"center",color:"var(--muted)",padding:32,border:"1px dashed var(--border)",fontSize:13}}>Aucun dossier</div>}
             {filteredDossiers.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(d=>(
@@ -826,8 +894,9 @@ export default function App() {
             )}
             {!activeDossier.retour?.degats?.length&&activeDossier.retour&&(<div style={{marginTop:12,padding:"14px 16px",border:"1px solid rgba(48,160,80,.3)",background:"rgba(48,160,80,.06)",color:"#208040",fontSize:13,fontWeight:600}}>✓ Aucun dégât constaté — nacelle rendue conforme</div>)}
             {activeDossier.retour?.note&&<div className="card" style={{marginTop:10}}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:6}}>Notes</div><div style={{fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{activeDossier.retour.note}</div></div>}
-            <div style={{marginTop:6,padding:"10px 14px",background:"#f8f9fb",border:"1px solid var(--border)",fontSize:11,color:"var(--muted)"}}>
-              DELTA SERVICES / 14 Avenue James de Rothschild / 77164 Ferrières-en-Brie · Tel. +33 (0)1 60 95 47 80 · Siret : 512 252 792 00050
+            <div style={{marginTop:6,padding:"10px 14px",background:"#f8f9fb",border:"1px solid var(--border)",fontSize:11,color:"var(--muted)",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+              <span>DELTA SERVICES / 14 Avenue James de Rothschild / 77164 Ferrières-en-Brie · Tel. +33 (0)1 60 95 47 80 · Siret : 512 252 792 00050</span>
+              <span style={{fontWeight:600,color:"var(--primary)"}}>© {new Date().getFullYear()} Delta Services · Tous droits réservés</span>
             </div>
             <div className="g2" style={{marginTop:14}}>
               {[["Expert départ",activeDossier.depart?.agent,activeDossier.depart?.date],["Expert retour",activeDossier.retour?.agent,activeDossier.retour?.date],["Client (accord état départ)",activeDossier.info?.client,""],["Client (accord retenue)",activeDossier.info?.client,""]].map(([l,n,d])=>(
@@ -840,6 +909,11 @@ export default function App() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* FOOTER */}
+      <div style={{textAlign:"center",padding:"16px",fontSize:11,color:"var(--muted)",borderTop:"1px solid var(--border)",marginTop:20}} className="no-print">
+        © {new Date().getFullYear()} Delta Services · Application propriétaire · Tous droits réservés · Reproduction interdite
       </div>
 
       {/* ADMIN */}
