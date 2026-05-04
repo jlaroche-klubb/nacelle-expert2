@@ -293,6 +293,7 @@ export default function App() {
   }
   async function deleteTarif(idx) { const updated=tarifs.filter((_,i)=>i!==idx); setTarifs(updated); await fbSaveConfig("tarifs",{data:updated}); flash("Poste supprimé ✓"); }
   async function deleteDossier(immat) {
+    if(!immat) { alert("Impossible de supprimer : immatriculation manquante.\nSupprimez ce dossier directement depuis la console Firebase."); return; }
     try {
       await deleteDoc(doc(db,"dossiers",immat));
       setDossiers(prev=>{ const n={...prev}; delete n[immat]; return n; });
@@ -303,7 +304,7 @@ export default function App() {
 
   const vetusteTaux = foundDossier ? getVetuste(foundDossier.info?.annee_fab) : 0;
   const totalRetenue = retDegats.reduce((s,id)=>{ const t=tarifs.find(t=>t.id===id); if(!t||t.surDevis||!t.prix) return s; return s+prixAvecVetuste(t.prix,vetusteTaux); },0);
-  const filteredDossiers = Object.values(dossiers).filter(d=>!searchQ||[d.immat,d.info?.client,d.info?.contrat].some(v=>v?.toLowerCase().includes(searchQ.toLowerCase())));
+  const filteredDossiers = Object.values(dossiers).filter(d=>!searchQ||[d.immat,d.info?.client,d.info?.contrat].some(v=>v?.toLowerCase?.().includes(searchQ.toLowerCase())));
 
   function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false); }
 
@@ -401,7 +402,10 @@ export default function App() {
                 </div>
                 <div style={{display:"flex",justifyContent:"space-between"}}>
                   <button className="btn btn-outline" onClick={goHome}>← Annuler</button>
-                  <button className="btn btn-gold" disabled={!depForm.immat} onClick={()=>setDepStep(1)}>Suivant →</button>
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
+                    {!depForm.immat&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ L'immatriculation est obligatoire</div>}
+                    <button className="btn btn-gold" disabled={!depForm.immat} onClick={()=>setDepStep(1)}>Suivant →</button>
+                  </div>
                 </div>
               </div>
             )}
@@ -540,8 +544,9 @@ export default function App() {
                     </div>
                     <div style={{padding:"16px",border:"2px dashed var(--border2)",background:"#f8f9fb"}}>
                       <div style={{fontSize:13,fontWeight:600,color:"var(--primary)",marginBottom:6}}>Retour sans dossier départ</div>
-                      <div style={{fontSize:12,color:"var(--muted)",marginBottom:12}}>Aucun état de départ disponible. Un dossier vide sera créé automatiquement.</div>
-                      <button className="btn btn-accent" onClick={async()=>{
+                      <div style={{fontSize:12,color:"var(--muted)",marginBottom:12}}>Aucun état de départ disponible. L'immatriculation sera utilisée comme référence.</div>
+                      {!searchImmat.trim() && <div style={{color:"var(--accent)",fontSize:12,marginBottom:8}}>⚠ Saisissez d'abord l'immatriculation ci-dessus.</div>}
+                      <button className="btn btn-accent" disabled={!searchImmat.trim()} onClick={async()=>{
                         const d={id:genId(),immat:searchImmat,info:{immat:searchImmat,type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""},depart:{zones:{},photos:{},date:todayISO(),heures:"",km_porteur:"",agent:"",sansDossier:true},retour:null,createdAt:new Date().toISOString()};
                         await fbSaveDossier(d);
                         setDossiers(prev=>({...prev,[d.immat]:d}));
@@ -892,7 +897,7 @@ export default function App() {
                             </span>
                           </div>
                         </div>
-                        <button className="btn btn-danger btn-sm" onClick={()=>{ if(window.confirm(`Supprimer définitivement le dossier "${d.immat}" (${d.info?.client||"sans client"}) ?`)) deleteDossier(d.immat); }}>🗑 Supprimer</button>
+                        <button className="btn btn-danger btn-sm" onClick={()=>{ if(window.confirm(`Supprimer définitivement le dossier "${d.immat||"SANS IMMAT"}" (${d.info?.client||"sans client"}) ?`)) deleteDossier(d.immat||d.id); }}>🗑 Supprimer</button>
                       </div>
                     ))}
                   </div>
