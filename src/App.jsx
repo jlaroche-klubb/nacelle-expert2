@@ -348,7 +348,7 @@ export default function App() {
                   </div>
                   <div style={{display:"flex",gap:8,alignItems:"center"}}>
                     <span style={{fontSize:11,color:"var(--muted)"}}>{d.depart?.date}</span>
-                    <span className={`badge ${d.retour?"badge-ok":"badge-warn"}`}>{d.retour?"Retour traité":"En location"}</span>
+                    <span className={`badge ${d.retour?"badge-ok":d.depart?.sansDossier?"badge-danger":"badge-warn"}`}>{d.retour?"Retour traité":d.depart?.sansDossier?"Sans départ":"En location"}</span>
                   </div>
                 </div>
               </div>
@@ -526,7 +526,24 @@ export default function App() {
                     <button className="btn btn-gold" onClick={()=>{setFoundDossier(dossiers[searchImmat]||null);setSearchDone(true);}}>Rechercher</button>
                   </div>
                 </div>
-                {searchDone&&!foundDossier&&<div style={{color:"var(--accent)",fontSize:13,padding:"10px 14px",border:"1px solid rgba(200,16,46,.3)",background:"rgba(200,16,46,.06)",marginBottom:14}}>Aucun dossier pour « {searchImmat} »</div>}
+                {searchDone&&!foundDossier&&(
+                  <div style={{marginBottom:14}}>
+                    <div style={{color:"var(--accent)",fontSize:13,padding:"10px 14px",border:"1px solid rgba(200,16,46,.3)",background:"rgba(200,16,46,.06)",marginBottom:10}}>
+                      Aucun dossier départ pour « {searchImmat} »
+                    </div>
+                    <div style={{padding:"16px",border:"2px dashed var(--border2)",background:"#f8f9fb"}}>
+                      <div style={{fontSize:13,fontWeight:600,color:"var(--primary)",marginBottom:6}}>Retour sans dossier départ</div>
+                      <div style={{fontSize:12,color:"var(--muted)",marginBottom:12}}>Aucun état de départ disponible. Un dossier vide sera créé automatiquement.</div>
+                      <button className="btn btn-accent" onClick={async()=>{
+                        const d={id:genId(),immat:searchImmat,info:{immat:searchImmat,type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""},depart:{zones:{},photos:{},date:todayISO(),heures:"",km_porteur:"",agent:"",sansDossier:true},retour:null,createdAt:new Date().toISOString()};
+                        await fbSaveDossier(d);
+                        setDossiers(prev=>({...prev,[d.immat]:d}));
+                        setFoundDossier(d);
+                        setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetStep(1);
+                      }}>+ Créer retour sans départ</button>
+                    </div>
+                  </div>
+                )}
                 {foundDossier&&(
                   <div>
                     <div className="card" style={{marginBottom:14,border:"2px solid var(--primary)"}}>
