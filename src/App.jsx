@@ -219,61 +219,107 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext("2d");
 
-    // Fond blanc pur
-    ctx.fillStyle = "#ffffff";
+    // ── FOND SHOWROOM ──
+    // Dégradé vertical : gris studio en haut → blanc en bas
+    const bgGrad = ctx.createLinearGradient(0, 0, 0, H * 0.72);
+    bgGrad.addColorStop(0, "#d8dde6");
+    bgGrad.addColorStop(0.45, "#eef0f3");
+    bgGrad.addColorStop(1, "#ffffff");
+    ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, W, H);
 
-    // Bande bleue en bas
-    ctx.fillStyle = "#1a2a6e";
-    ctx.fillRect(0, H - 90, W, 90);
+    // Spotlight central (lumière depuis le haut)
+    const spotGrad = ctx.createRadialGradient(W/2, H*0.15, 0, W/2, H*0.3, W*0.65);
+    spotGrad.addColorStop(0, "rgba(255,255,255,0.55)");
+    spotGrad.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = spotGrad;
+    ctx.fillRect(0, 0, W, H);
 
-    // Bande rouge fine au-dessus
-    ctx.fillStyle = "#c8102e";
-    ctx.fillRect(0, H - 94, W, 4);
+    // ── LIGNE DE SOL ──
+    const floorY = H * 0.72;
+    // Sol blanc brillant
+    const floorGrad = ctx.createLinearGradient(0, floorY, 0, H);
+    floorGrad.addColorStop(0, "#ffffff");
+    floorGrad.addColorStop(1, "#f0f2f5");
+    ctx.fillStyle = floorGrad;
+    ctx.fillRect(0, floorY, W, H - floorY);
+
+    // Ligne de séparation sol/fond subtile
+    ctx.strokeStyle = "rgba(180,190,210,0.4)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, floorY); ctx.lineTo(W, floorY); ctx.stroke();
 
     const subject = new Image();
     subject.onload = () => {
-      // Ombre au sol
-      const shadowGrad = ctx.createRadialGradient(W/2, H-120, 0, W/2, H-120, 700);
-      shadowGrad.addColorStop(0, "rgba(0,0,0,0.18)");
-      shadowGrad.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.save(); ctx.scale(1, 0.25);
+      // ── NACELLE ── grande, centrée, posée sur le sol
+      const maxW = W * 0.88;
+      const maxH = floorY * 0.90;
+      const scale = Math.min(maxW / subject.naturalWidth, maxH / subject.naturalHeight);
+      const sw = subject.naturalWidth * scale;
+      const sh = subject.naturalHeight * scale;
+      const sx = (W - sw) / 2;
+      const sy = floorY - sh + (sh * 0.04); // posée sur la ligne de sol
+
+      // Ombre portée sous la nacelle (nette et réaliste)
+      ctx.save();
+      ctx.translate(sx + sw/2, floorY);
+      ctx.scale(1, 0.15);
+      const shadowGrad = ctx.createRadialGradient(0, 0, sw*0.05, 0, 0, sw*0.52);
+      shadowGrad.addColorStop(0, "rgba(20,30,60,0.55)");
+      shadowGrad.addColorStop(0.5, "rgba(20,30,60,0.25)");
+      shadowGrad.addColorStop(1, "rgba(20,30,60,0)");
       ctx.fillStyle = shadowGrad;
-      ctx.beginPath(); ctx.ellipse(W/2, (H-120)/0.25, 750, 300, 0, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(0, 0, sw*0.52, sw*0.52, 0, 0, Math.PI*2); ctx.fill();
       ctx.restore();
 
-      // Nacelle centrée
-      const maxW = W * 0.78, maxH = (H - 94) * 0.82;
-      const scale = Math.min(maxW/subject.naturalWidth, maxH/subject.naturalHeight);
-      const sw = subject.naturalWidth * scale, sh = subject.naturalHeight * scale;
-      const sx = (W - sw) / 2, sy = (H - 94 - sh) / 2 + 20;
+      // ── REFLET SOL (effet showroom) ──
+      ctx.save();
+      ctx.translate(sx, floorY);
+      ctx.scale(1, -0.22); // reflet vertical inversé et aplati
+      ctx.globalAlpha = 0.18;
+      // Dégradé sur le reflet pour le faire disparaître
+      const reflGrad = ctx.createLinearGradient(0, 0, 0, sh * 0.22);
+      reflGrad.addColorStop(0, "rgba(255,255,255,0)");
+      reflGrad.addColorStop(1, "rgba(255,255,255,1)");
+      ctx.drawImage(subject, 0, 0, sw, sh);
+      ctx.fillStyle = reflGrad;
+      ctx.globalAlpha = 0.82;
+      ctx.fillRect(0, 0, sw, sh);
+      ctx.restore();
+      ctx.globalAlpha = 1;
 
-      ctx.shadowColor = "rgba(0,0,0,0.2)";
-      ctx.shadowBlur = 50; ctx.shadowOffsetX = 15; ctx.shadowOffsetY = 20;
+      // Nacelle principale
       ctx.drawImage(subject, sx, sy, sw, sh);
-      ctx.shadowColor = "transparent";
 
-      // Logo Delta Services
+      // ── BANDE BLEUE EN BAS ──
+      const barH = 88;
+      ctx.fillStyle = "#1a2a6e";
+      ctx.fillRect(0, H - barH, W, barH);
+      // Liseré rouge
+      ctx.fillStyle = "#c8102e";
+      ctx.fillRect(0, H - barH - 4, W, 4);
+
+      // ── LOGO DELTA SERVICES ──
       const logo = new Image();
       logo.onload = () => {
-        const logoH = 52, logoW = (logo.naturalWidth / logo.naturalHeight) * logoH;
-        // Logo blanc (filtre invert)
-        const tmpCanvas = document.createElement("canvas");
-        tmpCanvas.width = logoW; tmpCanvas.height = logoH;
-        const tmpCtx = tmpCanvas.getContext("2d");
+        const logoH = 54, logoW = (logo.naturalWidth / logo.naturalHeight) * logoH;
+        const tmpC = document.createElement("canvas");
+        tmpC.width = logoW; tmpC.height = logoH;
+        const tmpCtx = tmpC.getContext("2d");
         tmpCtx.filter = "brightness(0) invert(1)";
         tmpCtx.drawImage(logo, 0, 0, logoW, logoH);
-        ctx.drawImage(tmpCanvas, 36, H - 90 + (90 - logoH) / 2, logoW, logoH);
+        ctx.drawImage(tmpC, 40, H - barH + (barH - logoH)/2, logoW, logoH);
 
         // Immatriculation à droite
         if (immat) {
-          ctx.fillStyle = "rgba(255,255,255,0.9)";
-          ctx.font = "bold 28px 'Share Tech Mono', monospace";
+          ctx.fillStyle = "rgba(255,255,255,0.92)";
+          ctx.font = "bold 30px 'Share Tech Mono', monospace";
           ctx.textAlign = "right";
-          ctx.fillText(immat, W - 36, H - 90 + 56);
+          ctx.letterSpacing = "3px";
+          ctx.fillText(immat, W - 40, H - barH + barH/2 + 10);
         }
 
-        res(canvas.toDataURL("image/jpeg", 0.95));
+        res(canvas.toDataURL("image/jpeg", 0.96));
       };
       logo.onerror = () => res(canvas.toDataURL("image/jpeg", 0.95));
       logo.src = DELTA_LOGO;
