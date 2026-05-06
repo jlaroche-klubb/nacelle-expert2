@@ -219,104 +219,143 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext("2d");
 
-    // ── FOND SHOWROOM ──
-    // Dégradé vertical : gris studio en haut → blanc en bas
-    const bgGrad = ctx.createLinearGradient(0, 0, 0, H * 0.72);
-    bgGrad.addColorStop(0, "#d8dde6");
-    bgGrad.addColorStop(0.45, "#eef0f3");
-    bgGrad.addColorStop(1, "#ffffff");
-    ctx.fillStyle = bgGrad;
-    ctx.fillRect(0, 0, W, H);
+    // ── BOÎTE STUDIO (mur du fond + mur latéral + sol) ──
+    // Couleurs Delta Services : bleu marine + blanc cassé
+    const wallBack = "#dce2ec";   // mur du fond gris bleuté clair
+    const wallSide = "#c8d0de";   // mur latéral légèrement plus foncé
+    const floorCol = "#eef0f4";   // sol blanc cassé
 
-    // Spotlight central (lumière depuis le haut)
-    const spotGrad = ctx.createRadialGradient(W/2, H*0.15, 0, W/2, H*0.3, W*0.65);
-    spotGrad.addColorStop(0, "rgba(255,255,255,0.55)");
-    spotGrad.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = spotGrad;
-    ctx.fillRect(0, 0, W, H);
+    // Point de fuite (coin de la boîte) — légèrement à gauche du centre
+    const vpX = W * 0.42, vpY = H * 0.38;
+    // Coins de l'image
+    const TL = {x:0, y:0}, TR = {x:W, y:0};
+    const BL = {x:0, y:H}, BR = {x:W, y:H};
 
-    // ── LIGNE DE SOL ──
-    const floorY = H * 0.72;
-    // Sol blanc brillant
-    const floorGrad = ctx.createLinearGradient(0, floorY, 0, H);
-    floorGrad.addColorStop(0, "#ffffff");
-    floorGrad.addColorStop(1, "#f0f2f5");
-    ctx.fillStyle = floorGrad;
-    ctx.fillRect(0, floorY, W, H - floorY);
+    // Mur du fond (rectangle central)
+    const wallW = W * 0.58, wallH = H * 0.72;
+    const wallX = (W - wallW) / 2 - W*0.04;
+    const wallY = 0;
+    ctx.fillStyle = wallBack;
+    ctx.fillRect(0, 0, W, H); // base
 
-    // Ligne de séparation sol/fond subtile
-    ctx.strokeStyle = "rgba(180,190,210,0.4)";
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(0, floorY); ctx.lineTo(W, floorY); ctx.stroke();
+    // Mur latéral droit (trapèze)
+    ctx.beginPath();
+    ctx.moveTo(wallX + wallW, wallY);
+    ctx.lineTo(TR.x, TR.y);
+    ctx.lineTo(TR.x, H * 0.68);
+    ctx.lineTo(wallX + wallW, wallY + wallH);
+    ctx.closePath();
+    ctx.fillStyle = wallSide;
+    ctx.fill();
+
+    // Sol (trapèze bas)
+    ctx.beginPath();
+    ctx.moveTo(0, H * 0.68);
+    ctx.lineTo(W, H * 0.68);
+    ctx.lineTo(W, H);
+    ctx.lineTo(0, H);
+    ctx.closePath();
+    ctx.fillStyle = floorCol;
+    ctx.fill();
+
+    // Ligne mur/sol
+    ctx.strokeStyle = "rgba(150,165,190,0.5)";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, H*0.68); ctx.lineTo(W, H*0.68); ctx.stroke();
+
+    // Accent Delta — deux bandes diagonales bleu marine sur le mur du fond (comme OK! mais style Delta)
+    ctx.save();
+    ctx.globalAlpha = 0.09;
+    ctx.fillStyle = "#1a2a6e";
+    // Bande 1
+    ctx.beginPath();
+    ctx.moveTo(W*0.52, 0); ctx.lineTo(W*0.72, 0); ctx.lineTo(W*0.45, H*0.68); ctx.lineTo(W*0.25, H*0.68);
+    ctx.closePath(); ctx.fill();
+    // Bande 2
+    ctx.beginPath();
+    ctx.moveTo(W*0.72, 0); ctx.lineTo(W*0.88, 0); ctx.lineTo(W*0.62, H*0.68); ctx.lineTo(W*0.46, H*0.68);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+
+    // Spotlight haut centre
+    const spot = ctx.createRadialGradient(W*0.46, 0, 0, W*0.46, H*0.2, W*0.5);
+    spot.addColorStop(0, "rgba(255,255,255,0.45)");
+    spot.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = spot;
+    ctx.fillRect(0, 0, W, H*0.68);
 
     const subject = new Image();
     subject.onload = () => {
-      // ── NACELLE ── grande, centrée, posée sur le sol
-      const maxW = W * 0.88;
-      const maxH = floorY * 0.90;
+      const floorLineY = H * 0.68;
+
+      // Nacelle grande, posée sur le sol
+      const maxW = W * 0.82;
+      const maxH = floorLineY * 0.88;
       const scale = Math.min(maxW / subject.naturalWidth, maxH / subject.naturalHeight);
       const sw = subject.naturalWidth * scale;
       const sh = subject.naturalHeight * scale;
-      const sx = (W - sw) / 2;
-      const sy = floorY - sh + (sh * 0.04); // posée sur la ligne de sol
+      const sx = (W - sw) / 2 - W*0.03; // légèrement à gauche
+      const sy = floorLineY - sh + sh*0.02;
 
-      // Ombre portée sous la nacelle (nette et réaliste)
+      // Ombre portée nette sous les roues
       ctx.save();
-      ctx.translate(sx + sw/2, floorY);
-      ctx.scale(1, 0.15);
-      const shadowGrad = ctx.createRadialGradient(0, 0, sw*0.05, 0, 0, sw*0.52);
-      shadowGrad.addColorStop(0, "rgba(20,30,60,0.55)");
-      shadowGrad.addColorStop(0.5, "rgba(20,30,60,0.25)");
-      shadowGrad.addColorStop(1, "rgba(20,30,60,0)");
-      ctx.fillStyle = shadowGrad;
-      ctx.beginPath(); ctx.ellipse(0, 0, sw*0.52, sw*0.52, 0, 0, Math.PI*2); ctx.fill();
+      ctx.translate(sx + sw*0.5, floorLineY - 8);
+      ctx.scale(1, 0.12);
+      const shadowG = ctx.createRadialGradient(0, 0, sw*0.05, 0, 0, sw*0.50);
+      shadowG.addColorStop(0, "rgba(15,25,55,0.70)");
+      shadowG.addColorStop(0.4, "rgba(15,25,55,0.35)");
+      shadowG.addColorStop(1, "rgba(15,25,55,0)");
+      ctx.fillStyle = shadowG;
+      ctx.beginPath(); ctx.ellipse(0, 0, sw*0.50, sw*0.50, 0, 0, Math.PI*2); ctx.fill();
       ctx.restore();
 
-      // ── REFLET SOL (effet showroom) ──
+      // Reflet sol discret
       ctx.save();
-      ctx.translate(sx, floorY);
-      ctx.scale(1, -0.22); // reflet vertical inversé et aplati
-      ctx.globalAlpha = 0.18;
-      // Dégradé sur le reflet pour le faire disparaître
-      const reflGrad = ctx.createLinearGradient(0, 0, 0, sh * 0.22);
-      reflGrad.addColorStop(0, "rgba(255,255,255,0)");
-      reflGrad.addColorStop(1, "rgba(255,255,255,1)");
+      ctx.translate(sx, floorLineY);
+      ctx.scale(1, -0.18);
+      ctx.globalAlpha = 0.12;
       ctx.drawImage(subject, 0, 0, sw, sh);
-      ctx.fillStyle = reflGrad;
-      ctx.globalAlpha = 0.82;
+      const refMask = ctx.createLinearGradient(0, 0, 0, sh*0.18);
+      refMask.addColorStop(0, "rgba(238,240,244,0)");
+      refMask.addColorStop(1, "rgba(238,240,244,1)");
+      ctx.globalAlpha = 0.88;
+      ctx.fillStyle = refMask;
       ctx.fillRect(0, 0, sw, sh);
       ctx.restore();
       ctx.globalAlpha = 1;
 
-      // Nacelle principale
+      // Nacelle
       ctx.drawImage(subject, sx, sy, sw, sh);
 
-      // ── BANDE BLEUE EN BAS ──
-      const barH = 88;
+      // ── BARRE DELTA EN BAS ──
+      const barH = 92;
       ctx.fillStyle = "#1a2a6e";
       ctx.fillRect(0, H - barH, W, barH);
-      // Liseré rouge
       ctx.fillStyle = "#c8102e";
-      ctx.fillRect(0, H - barH - 4, W, 4);
+      ctx.fillRect(0, H - barH - 5, W, 5);
 
-      // ── LOGO DELTA SERVICES ──
+      // Logo Delta blanc
       const logo = new Image();
       logo.onload = () => {
-        const logoH = 54, logoW = (logo.naturalWidth / logo.naturalHeight) * logoH;
+        const logoH = 56, logoW = (logo.naturalWidth / logo.naturalHeight) * logoH;
         const tmpC = document.createElement("canvas");
         tmpC.width = logoW; tmpC.height = logoH;
         const tmpCtx = tmpC.getContext("2d");
         tmpCtx.filter = "brightness(0) invert(1)";
         tmpCtx.drawImage(logo, 0, 0, logoW, logoH);
-        ctx.drawImage(tmpC, 40, H - barH + (barH - logoH)/2, logoW, logoH);
+        ctx.drawImage(tmpC, 44, H - barH + (barH - logoH)/2, logoW, logoH);
 
-        // Immatriculation à droite
+        // Séparateur vertical
+        ctx.strokeStyle = "rgba(255,255,255,0.25)";
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(logoW + 70, H - barH + 18); ctx.lineTo(logoW + 70, H - 18); ctx.stroke();
+
+        // Immatriculation
         if (immat) {
-          ctx.fillStyle = "rgba(255,255,255,0.92)";
-          ctx.font = "bold 30px 'Share Tech Mono', monospace";
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "700 32px 'Share Tech Mono', monospace";
           ctx.textAlign = "right";
-          ctx.letterSpacing = "3px";
-          ctx.fillText(immat, W - 40, H - barH + barH/2 + 10);
+          ctx.fillText(immat, W - 44, H - barH + barH/2 + 11);
         }
 
         res(canvas.toDataURL("image/jpeg", 0.96));
