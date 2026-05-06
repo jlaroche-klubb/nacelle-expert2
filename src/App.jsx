@@ -214,13 +214,13 @@ async function removeBackground(base64) {
 
 async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
   return new Promise(res => {
-    // Format 9/16 (Instagram Stories / Reels)
-    const W = 1080, H = 1920;
+    // Format carré 1:1
+    const W = 1080, H = 1080;
     const canvas = document.createElement("canvas");
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext("2d");
 
-    const barH = 160;
+    const barH = 110;
 
     // Fond gris très clair
     ctx.fillStyle = "#f0f2f5";
@@ -232,101 +232,95 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
 
     // Liseré rouge
     ctx.fillStyle = "#c8102e";
-    ctx.fillRect(0, H - barH - 6, W, 6);
+    ctx.fillRect(0, H - barH - 5, W, 5);
 
     const subject = new Image();
     subject.onload = () => {
-      // Analyser les pixels pour trouver le vrai bas de la nacelle
+      // Analyser les pixels pour trouver le vrai bas (roues)
       const tmpC = document.createElement("canvas");
-      const preScale = Math.min((W * 0.92) / subject.naturalWidth, ((H - barH - 6) * 0.85) / subject.naturalHeight);
+      const preScale = Math.min(W / subject.naturalWidth, (H - barH - 5) / subject.naturalHeight);
       tmpC.width = Math.round(subject.naturalWidth * preScale);
       tmpC.height = Math.round(subject.naturalHeight * preScale);
       const tmpCtx = tmpC.getContext("2d");
       tmpCtx.drawImage(subject, 0, 0, tmpC.width, tmpC.height);
       const pixels = tmpCtx.getImageData(0, 0, tmpC.width, tmpC.height).data;
 
-      // Trouver dernière ligne avec pixels opaques (bas réel = roues)
+      // Dernière ligne opaque = bas des roues
       let bottomRow = tmpC.height - 1;
-      for (let y = tmpC.height - 1; y >= 0; y--) {
+      outer: for (let y = tmpC.height - 1; y >= 0; y--) {
         for (let x = 0; x < tmpC.width; x++) {
-          if (pixels[(y * tmpC.width + x) * 4 + 3] > 30) { bottomRow = y; break; }
+          if (pixels[(y * tmpC.width + x) * 4 + 3] > 30) { bottomRow = y; break outer; }
         }
-        if (pixels[(bottomRow * tmpC.width + Math.floor(tmpC.width/2)) * 4 + 3] > 30 && bottomRow === y) break;
+      }
+      // Première ligne opaque = haut
+      let topRow = 0;
+      outer2: for (let y = 0; y < tmpC.height; y++) {
+        for (let x = 0; x < tmpC.width; x++) {
+          if (pixels[(y * tmpC.width + x) * 4 + 3] > 30) { topRow = y; break outer2; }
+        }
       }
 
-      // Scale final
-      const maxW = W * 0.92;
-      const maxH = (H - barH - 6) * 0.85;
-      const scale = Math.min(maxW / subject.naturalWidth, maxH / subject.naturalHeight);
-      const sw = subject.naturalWidth * scale;
-      const sh = subject.naturalHeight * scale;
+      // Nacelle très grande — 96% de la largeur, très peu de marge
+      const margin = 20; // px de marge autour
+      const availW = W - margin * 2;
+      const availH = (H - barH - 5) - margin * 2;
+      const contentW = subject.naturalWidth;
+      const contentH = subject.naturalHeight;
+      const scale = Math.min(availW / contentW, availH / contentH);
+      const sw = contentW * scale;
+      const sh = contentH * scale;
 
-      // Position : bas des roues = ligne de sol à 78% de hauteur
-      const floorY = H * 0.78;
-      const bottomOffsetPx = (tmpC.height - bottomRow) / tmpC.height * sh;
+      // Centrage horizontal, bas des roues en bas de la zone disponible
       const sx = (W - sw) / 2;
+      const bottomOffsetPx = (tmpC.height - 1 - bottomRow) / tmpC.height * sh;
+      const floorY = H - barH - 5 - margin;
       const sy = floorY - sh + bottomOffsetPx;
 
-      // Ombre portée sous les roues
+      // Ombre portée
       ctx.save();
-      ctx.translate(sx + sw * 0.5, floorY + 8);
-      ctx.scale(1, 0.12);
-      const shadowG = ctx.createRadialGradient(0, 0, sw * 0.04, 0, 0, sw * 0.48);
-      shadowG.addColorStop(0, "rgba(15,25,60,0.65)");
-      shadowG.addColorStop(0.4, "rgba(15,25,60,0.28)");
+      ctx.translate(sx + sw * 0.5, floorY + 6);
+      ctx.scale(1, 0.10);
+      const shadowG = ctx.createRadialGradient(0, 0, sw * 0.03, 0, 0, sw * 0.50);
+      shadowG.addColorStop(0, "rgba(15,25,60,0.60)");
+      shadowG.addColorStop(0.4, "rgba(15,25,60,0.25)");
       shadowG.addColorStop(1, "rgba(15,25,60,0)");
       ctx.fillStyle = shadowG;
-      ctx.beginPath(); ctx.ellipse(0, 0, sw * 0.48, sw * 0.48, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(0, 0, sw * 0.50, sw * 0.50, 0, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
-
-      // Reflet sol discret
-      ctx.save();
-      ctx.translate(sx, floorY);
-      ctx.scale(1, -0.12);
-      ctx.globalAlpha = 0.10;
-      ctx.drawImage(subject, 0, 0, sw, sh);
-      const refMask = ctx.createLinearGradient(0, 0, 0, sh * 0.12);
-      refMask.addColorStop(0, "rgba(240,242,245,0)");
-      refMask.addColorStop(1, "rgba(240,242,245,1)");
-      ctx.globalAlpha = 0.9;
-      ctx.fillStyle = refMask;
-      ctx.fillRect(0, 0, sw, sh);
-      ctx.restore();
-      ctx.globalAlpha = 1;
 
       // Nacelle
-      ctx.shadowColor = "rgba(0,0,0,0.18)";
-      ctx.shadowBlur = 40;
-      ctx.shadowOffsetX = 10;
-      ctx.shadowOffsetY = 16;
+      ctx.shadowColor = "rgba(0,0,0,0.15)";
+      ctx.shadowBlur = 30;
+      ctx.shadowOffsetX = 8;
+      ctx.shadowOffsetY = 12;
       ctx.drawImage(subject, sx, sy, sw, sh);
       ctx.shadowColor = "transparent";
 
       // Logo Delta blanc
       const logo = new Image();
       logo.onload = () => {
-        const logoH = 76, logoW = (logo.naturalWidth / logo.naturalHeight) * logoH;
+        const logoH = 62, logoW = (logo.naturalWidth / logo.naturalHeight) * logoH;
         const tmpLogo = document.createElement("canvas");
         tmpLogo.width = logoW; tmpLogo.height = logoH;
         const lCtx = tmpLogo.getContext("2d");
         lCtx.filter = "brightness(0) invert(1)";
         lCtx.drawImage(logo, 0, 0, logoW, logoH);
-        ctx.drawImage(tmpLogo, 44, H - barH + (barH - logoH) / 2, logoW, logoH);
+        ctx.drawImage(tmpLogo, 36, H - barH + (barH - logoH) / 2, logoW, logoH);
 
         // Séparateur
         ctx.strokeStyle = "rgba(255,255,255,0.25)";
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(logoW + 68, H - barH + 20);
-        ctx.lineTo(logoW + 68, H - 20);
+        ctx.moveTo(logoW + 60, H - barH + 16);
+        ctx.lineTo(logoW + 60, H - 16);
         ctx.stroke();
 
         // Immatriculation
         if (immat) {
           ctx.fillStyle = "#ffffff";
-          ctx.font = "700 38px monospace";
+          ctx.font = "700 34px monospace";
           ctx.textAlign = "right";
-          ctx.fillText(immat, W - 44, H - barH + barH / 2 + 14);
+          ctx.fillText(immat, W - 36, H - barH + barH / 2 + 12);
         }
 
         res(canvas.toDataURL("image/jpeg", 0.96));
@@ -390,7 +384,7 @@ export default function App() {
   const [commercialPhotos,setCommercialPhotos]=useState({}); // { "av_droit": base64, "ar_gauche": base64 }
   const [processingPhoto,setProcessingPhoto]=useState(null); // clé en cours de traitement
 
-  const [retForm,setRetForm]=useState({date:todayISO(),heures:"",km_porteur:"",agent:""});
+  const [retForm,setRetForm]=useState({date:todayISO(),heures:"",km_porteur:"",agent:"",emailClient:""});
   const [retZones,setRetZones]=useState({});
   const [retPhotos,setRetPhotos]=useState({});
   const [retDegats,setRetDegats]=useState([]);
@@ -424,7 +418,7 @@ export default function App() {
   }
   async function saveRetour() {
     if(!foundDossier) return;
-    const updated={...foundDossier,retour:{zones:retZones,photos:retPhotos,degats:retDegats,note:retNote,date:retForm.date,heures:retForm.heures,km_porteur:retForm.km_porteur,agent:retForm.agent},updatedAt:new Date().toISOString()};
+    const updated={...foundDossier,retour:{zones:retZones,photos:retPhotos,degats:retDegats,note:retNote,date:retForm.date,heures:retForm.heures,km_porteur:retForm.km_porteur,agent:retForm.agent,emailClient:retForm.emailClient},updatedAt:new Date().toISOString()};
     await fbSaveDossier(updated); setDossiers(prev=>({...prev,[updated.immat]:updated})); setActiveDossier(updated); return updated;
   }
 
@@ -800,7 +794,7 @@ export default function App() {
                         await fbSaveDossier(d);
                         setDossiers(prev=>({...prev,[d.immat]:d}));
                         setFoundDossier(d);
-                        setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setRetStep(1);
+                        setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setRetForm(prev=>({...prev,emailClient:foundDossier.info?.email||""}));setRetStep(1);
                       }}>+ Créer retour sans départ</button>
                     </div>
                   </div>
@@ -829,7 +823,7 @@ export default function App() {
                     </div>
                     <div style={{display:"flex",justifyContent:"space-between"}}>
                       <button className="btn btn-outline" onClick={()=>{setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>← Annuler</button>
-                      <button className="btn btn-gold" onClick={()=>{setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setRetStep(1);}}>Démarrer expertise retour →</button>
+                      <button className="btn btn-gold" onClick={()=>{setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setRetForm(prev=>({...prev,emailClient:foundDossier.info?.email||""}));setRetStep(1);}}>Démarrer expertise retour →</button>
                     </div>
                   </div>
                 )}
@@ -1000,8 +994,17 @@ export default function App() {
                   ):(<div style={{padding:"12px 0",color:"#208040",fontWeight:600}}>✓ Aucun dégât — nacelle rendue conforme</div>)}
                 </div>
                 <div className="card" style={{marginBottom:14}}>
-                  <label>Notes / observations complémentaires</label>
-                  <textarea value={retNote} onChange={e=>setRetNote(e.target.value)} rows={3} placeholder="Réserves, observations..." style={{resize:"vertical"}}/>
+                  <div className="g2" style={{marginBottom:12}}>
+                    <div>
+                      <label>Email client {foundDossier?.depart?.sansDossier?"*":""}</label>
+                      <input type="email" value={retForm.emailClient} onChange={e=>setRetForm({...retForm,emailClient:e.target.value})} placeholder="client@email.com"/>
+                      {foundDossier?.info?.email&&retForm.emailClient===foundDossier.info.email&&<div style={{fontSize:10,color:"var(--ok)",marginTop:4}}>✓ Pré-rempli depuis le dossier départ</div>}
+                    </div>
+                    <div>
+                      <label>Notes / observations</label>
+                      <textarea value={retNote} onChange={e=>setRetNote(e.target.value)} rows={3} placeholder="Réserves, observations..." style={{resize:"vertical"}}/>
+                    </div>
+                  </div>
                 </div>
                 <div className="g2" style={{marginBottom:20}}>
                   {[["Expert retour",retForm.agent,retForm.date],["Client (accord retenue)",foundDossier.info?.client,""]].map(([l,n,d])=>(
@@ -1015,7 +1018,10 @@ export default function App() {
                 <div style={{display:"flex",justifyContent:"space-between",gap:10}}>
                   <button className="btn btn-outline" onClick={()=>setRetStep(1)}>← Modifier</button>
                   <button className="btn btn-outline btn-sm no-print" onClick={()=>window.print()}>⬇ PDF</button>
-                  <button className="btn btn-gold" onClick={async()=>{const d=await saveRetour();setActiveDossier(d);setView("rapport");}}>✓ Confirmer & sauvegarder</button>
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
+                  {foundDossier?.depart?.sansDossier&&!retForm.emailClient.trim()&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Email client obligatoire</div>}
+                  <button className="btn btn-gold" disabled={foundDossier?.depart?.sansDossier&&!retForm.emailClient.trim()} onClick={async()=>{const d=await saveRetour();setActiveDossier(d);setView("rapport");}}>✓ Confirmer & sauvegarder</button>
+                </div>
                 </div>
               </div>
             )}
