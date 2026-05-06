@@ -219,157 +219,58 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext("2d");
 
+    const barH = 130; // bande du bas plus grande
+
+    // Fond gris très clair
+    ctx.fillStyle = "#f2f3f5";
+    ctx.fillRect(0, 0, W, H);
+
+    // Bande bleue en bas (plus grande)
+    ctx.fillStyle = "#1a2a6e";
+    ctx.fillRect(0, H - barH, W, barH);
+
+    // Liseré rouge
+    ctx.fillStyle = "#c8102e";
+    ctx.fillRect(0, H - barH - 5, W, 5);
+
     const subject = new Image();
     subject.onload = () => {
+      // Zoom léger : 90% de la largeur, 88% de la hauteur dispo
+      const maxW = W * 0.90;
+      const maxH = (H - barH - 5) * 0.88;
+      const scale = Math.min(maxW / subject.naturalWidth, maxH / subject.naturalHeight);
+      const sw = subject.naturalWidth * scale;
+      const sh = subject.naturalHeight * scale;
+      const sx = (W - sw) / 2;
+      const sy = (H - barH - 5 - sh) / 2 + 10;
 
-      // ── DÉTECTER LE BAS RÉEL DE LA NACELLE (dernière ligne non-transparente) ──
-      // On dessine la nacelle sur un canvas temporaire pour analyser les pixels
-      const tmpC = document.createElement("canvas");
-      const scale0 = Math.min((W*0.82)/subject.naturalWidth, (H*0.75)/subject.naturalHeight);
-      tmpC.width = Math.round(subject.naturalWidth * scale0);
-      tmpC.height = Math.round(subject.naturalHeight * scale0);
-      const tmpCtx = tmpC.getContext("2d");
-      tmpCtx.drawImage(subject, 0, 0, tmpC.width, tmpC.height);
-      const pixels = tmpCtx.getImageData(0, 0, tmpC.width, tmpC.height).data;
-
-      // Trouver la dernière ligne avec des pixels opaques
-      let bottomRow = 0;
-      for (let y = tmpC.height - 1; y >= 0; y--) {
-        let hasPixel = false;
-        for (let x = 0; x < tmpC.width; x++) {
-          const alpha = pixels[(y * tmpC.width + x) * 4 + 3];
-          if (alpha > 30) { hasPixel = true; break; }
-        }
-        if (hasPixel) { bottomRow = y; break; }
-      }
-      // Trouver la première ligne avec des pixels opaques (haut)
-      let topRow = 0;
-      for (let y = 0; y < tmpC.height; y++) {
-        let hasPixel = false;
-        for (let x = 0; x < tmpC.width; x++) {
-          const alpha = pixels[(y * tmpC.width + x) * 4 + 3];
-          if (alpha > 30) { hasPixel = true; break; }
-        }
-        if (hasPixel) { topRow = y; break; }
-      }
-
-      // ── LAYOUT ──
-      const floorLineY = H * 0.70; // ligne sol
-      const barH = 92;
-      const availH = floorLineY * 0.92;
-      const availW = W * 0.84;
-
-      // Recalculer le scale pour que la nacelle remplisse bien l'espace
-      const contentH = bottomRow - topRow;
-      const contentW = tmpC.width;
-      const finalScale = Math.min(availW / contentW, availH / contentH);
-      const sw = subject.naturalWidth * finalScale;
-      const sh = subject.naturalHeight * finalScale;
-
-      // Position : bas des roues détectées = floorLineY
-      const bottomOffset = (subject.naturalHeight - bottomRow / scale0) * finalScale;
-      const sx = (W - sw) / 2 - W * 0.02;
-      const sy = floorLineY - sh + bottomOffset;
-
-      // ── FOND BOÎTE STUDIO ──
-      ctx.fillStyle = "#dce2ec";
-      ctx.fillRect(0, 0, W, H);
-
-      // Mur latéral droit
-      ctx.beginPath();
-      ctx.moveTo(W * 0.56, 0); ctx.lineTo(W, 0);
-      ctx.lineTo(W, floorLineY); ctx.lineTo(W * 0.56, floorLineY);
-      ctx.closePath();
-      ctx.fillStyle = "#c8d0de";
-      ctx.fill();
-
-      // Sol
-      ctx.fillStyle = "#eaecf2";
-      ctx.fillRect(0, floorLineY, W, H - floorLineY - barH - 5);
-
-      // Bandes diagonales Delta (discrètes)
-      ctx.save();
-      ctx.globalAlpha = 0.08;
-      ctx.fillStyle = "#1a2a6e";
-      ctx.beginPath();
-      ctx.moveTo(W*0.50,0); ctx.lineTo(W*0.68,0); ctx.lineTo(W*0.42,floorLineY); ctx.lineTo(W*0.24,floorLineY);
-      ctx.closePath(); ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(W*0.68,0); ctx.lineTo(W*0.84,0); ctx.lineTo(W*0.58,floorLineY); ctx.lineTo(W*0.42,floorLineY);
-      ctx.closePath(); ctx.fill();
-      ctx.restore();
-
-      // Spotlight
-      const spot = ctx.createRadialGradient(W*0.44, 0, 0, W*0.44, H*0.18, W*0.55);
-      spot.addColorStop(0, "rgba(255,255,255,0.5)");
-      spot.addColorStop(1, "rgba(255,255,255,0)");
-      ctx.fillStyle = spot;
-      ctx.fillRect(0, 0, W, floorLineY);
-
-      // Ligne mur/sol
-      ctx.strokeStyle = "rgba(140,155,185,0.45)";
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(0, floorLineY); ctx.lineTo(W, floorLineY); ctx.stroke();
-
-      // ── OMBRE PORTÉE (juste sous les roues) ──
-      const shadowCX = sx + sw * 0.5;
-      ctx.save();
-      ctx.translate(shadowCX, floorLineY);
-      ctx.scale(1, 0.10);
-      const shadowG = ctx.createRadialGradient(0, 0, sw*0.04, 0, 0, sw*0.46);
-      shadowG.addColorStop(0, "rgba(15,25,60,0.75)");
-      shadowG.addColorStop(0.45, "rgba(15,25,60,0.35)");
-      shadowG.addColorStop(1, "rgba(15,25,60,0)");
-      ctx.fillStyle = shadowG;
-      ctx.beginPath(); ctx.ellipse(0, 0, sw*0.46, sw*0.46, 0, 0, Math.PI*2); ctx.fill();
-      ctx.restore();
-
-      // ── REFLET SOL ──
-      ctx.save();
-      ctx.translate(sx, floorLineY);
-      ctx.scale(1, -0.14);
-      ctx.globalAlpha = 0.10;
-      ctx.drawImage(subject, 0, 0, sw, sh);
-      const refMask = ctx.createLinearGradient(0, 0, 0, sh * 0.14);
-      refMask.addColorStop(0, "rgba(234,236,242,0)");
-      refMask.addColorStop(1, "rgba(234,236,242,1)");
-      ctx.globalAlpha = 0.85;
-      ctx.fillStyle = refMask;
-      ctx.fillRect(0, 0, sw, sh);
-      ctx.restore();
-      ctx.globalAlpha = 1;
-
-      // ── NACELLE ──
+      ctx.shadowColor = "rgba(0,0,0,0.20)";
+      ctx.shadowBlur = 55;
+      ctx.shadowOffsetX = 14;
+      ctx.shadowOffsetY = 22;
       ctx.drawImage(subject, sx, sy, sw, sh);
+      ctx.shadowColor = "transparent";
 
-      // ── BARRE DELTA ──
-      ctx.fillStyle = "#1a2a6e";
-      ctx.fillRect(0, H - barH, W, barH);
-      ctx.fillStyle = "#c8102e";
-      ctx.fillRect(0, H - barH - 5, W, 5);
-
-      // Logo Delta blanc
       const logo = new Image();
       logo.onload = () => {
-        const logoH = 54, logoW = (logo.naturalWidth / logo.naturalHeight) * logoH;
-        const tmpLogo = document.createElement("canvas");
-        tmpLogo.width = logoW; tmpLogo.height = logoH;
-        const lCtx = tmpLogo.getContext("2d");
-        lCtx.filter = "brightness(0) invert(1)";
-        lCtx.drawImage(logo, 0, 0, logoW, logoH);
-        ctx.drawImage(tmpLogo, 44, H - barH + (barH - logoH)/2, logoW, logoH);
+        const logoH = 68, logoW = (logo.naturalWidth / logo.naturalHeight) * logoH;
+        const tmpC = document.createElement("canvas");
+        tmpC.width = logoW; tmpC.height = logoH;
+        const tmpCtx = tmpC.getContext("2d");
+        tmpCtx.filter = "brightness(0) invert(1)";
+        tmpCtx.drawImage(logo, 0, 0, logoW, logoH);
+        ctx.drawImage(tmpC, 48, H - barH + (barH - logoH)/2, logoW, logoH);
 
         // Séparateur
-        ctx.strokeStyle = "rgba(255,255,255,0.22)";
+        ctx.strokeStyle = "rgba(255,255,255,0.25)";
         ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(logoW+72, H-barH+16); ctx.lineTo(logoW+72, H-16); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(logoW+72, H-barH+20); ctx.lineTo(logoW+72, H-20); ctx.stroke();
 
-        // Immatriculation
         if (immat) {
           ctx.fillStyle = "#ffffff";
-          ctx.font = "700 32px monospace";
+          ctx.font = "700 36px monospace";
           ctx.textAlign = "right";
-          ctx.fillText(immat, W - 44, H - barH + barH/2 + 11);
+          ctx.fillText(immat, W - 48, H - barH + barH/2 + 13);
         }
 
         res(canvas.toDataURL("image/jpeg", 0.96));
