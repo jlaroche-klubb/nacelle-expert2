@@ -1,8 +1,6 @@
 export const config = { runtime: 'edge' };
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxi4yUjWBZmO-hd07ryP6bjx9Qvx25qAgYSomnOsa-0P3QRMofKyzcsKVAh9N2R-KWQ4g/exec";
-const DRIVE_FOLDER_RETOUR = "1HR5SzLhZr1aNd4AjlbKTGeqKWw1uCKbm";
-const DRIVE_FOLDER_DEPART = "1dcJaSEQ9fR2W-cuFZ2Mo2h8QBGQZNzUk";
 const SA_EMAIL = "nacelle-expert-drive@api-gemini-mail.iam.gserviceaccount.com";
 
 const SA_KEY_PARTS = [
@@ -52,13 +50,28 @@ async function getGoogleToken() {
   return tokenData.access_token;
 }
 
-async function uploadToDrive(token, folderId, filename, htmlContent) {
-  const metadata = { name: filename, mimeType: "application/vnd.google-apps.document", parents: [folderId] };
+async function uploadToDrive(token, filename, htmlContent) {
+  // Upload dans le Drive du compte de service (sans spécifier de dossier parent)
+  const metadata = { name: filename, mimeType: "application/vnd.google-apps.document" };
   const boundary = "nacelle_boundary";
   const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n${htmlContent}\r\n--${boundary}--`;
-  const uploadResp = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink", { method: "POST", headers: { "Authorization": `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` }, body });
+  
+  const uploadResp = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+    body
+  });
   const file = await uploadResp.json();
-  await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}/permissions`, { method: "POST", headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ role: "reader", type: "anyone" }) });
+  
+  if (!file.id) throw new Error("Upload Drive echoue: " + JSON.stringify(file));
+  
+  // Rendre public
+  await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}/permissions`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ role: "reader", type: "anyone" })
+  });
+  
   return file.webViewLink;
 }
 
@@ -70,17 +83,18 @@ export default async function handler(req) {
     const { to, immat, htmlRetour, htmlDepart, departOnly } = await req.json();
     if (!to || !immat) return new Response(JSON.stringify({ error: "Email et immatriculation requis" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
-    // 1. Upload sur Drive
     const token = await getGoogleToken();
     const dateStr = new Date().toLocaleDateString("fr-FR").replace(/\//g, "-");
-    const linkDepart = await uploadToDrive(token, DRIVE_FOLDER_DEPART, `Expertise_Depart_${immat}_${dateStr}`, htmlDepart);
+
+    // Upload dans le Drive du compte de service
+    const linkDepart = await uploadToDrive(token, `Expertise_Depart_${immat}_${dateStr}`, htmlDepart);
 
     let linkRetour = null;
     if (!departOnly && htmlRetour) {
-      linkRetour = await uploadToDrive(token, DRIVE_FOLDER_RETOUR, `Expertise_Retour_${immat}_${dateStr}`, htmlRetour);
+      linkRetour = await uploadToDrive(token, `Expertise_Retour_${immat}_${dateStr}`, htmlRetour);
     }
 
-    // 2. Envoyer email via Google Apps Script (Gmail)
+    // Email via Apps Script
     const emailResp = await fetch(APPS_SCRIPT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -90,7 +104,7 @@ export default async function handler(req) {
     const emailData = await emailResp.json();
     if (emailData.error) throw new Error(emailData.error);
 
-    return new Response(JSON.stringify({ ok: true, linkDepart, linkRetour }), {
+    return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
     });
