@@ -1,7 +1,6 @@
 export const config = { runtime: 'edge' };
 
-const RESEND_API_KEY = "re_GFYsMP3Y_FRLuxT3WGSfuf1XvdsRzWGky";
-const EMAIL_CC = "jlaroche@delta-services.fr";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxi4yUjWBZmO-hd07ryP6bjx9Qvx25qAgYSomnOsa-0P3QRMofKyzcsKVAh9N2R-KWQ4g/exec";
 const DRIVE_FOLDER_RETOUR = "1HR5SzLhZr1aNd4AjlbKTGeqKWw1uCKbm";
 const DRIVE_FOLDER_DEPART = "1dcJaSEQ9fR2W-cuFZ2Mo2h8QBGQZNzUk";
 const SA_EMAIL = "nacelle-expert-drive@api-gemini-mail.iam.gserviceaccount.com";
@@ -71,35 +70,35 @@ export default async function handler(req) {
     const { to, immat, htmlRetour, htmlDepart, departOnly } = await req.json();
     if (!to || !immat) return new Response(JSON.stringify({ error: "Email et immatriculation requis" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
+    // 1. Upload sur Drive
     const token = await getGoogleToken();
     const dateStr = new Date().toLocaleDateString("fr-FR").replace(/\//g, "-");
     const linkDepart = await uploadToDrive(token, DRIVE_FOLDER_DEPART, `Expertise_Depart_${immat}_${dateStr}`, htmlDepart);
 
-    let emailHTML, subject;
-
-    if (departOnly) {
-      subject = `Etat de depart - Nacelle ${immat}`;
-      emailHTML = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0;background:#f0f2f5;font-family:Arial,sans-serif;"><div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;"><div style="background:#1a2a6e;padding:28px 32px;"><div style="color:#fff;font-size:20px;font-weight:700;letter-spacing:2px;">ETAT DE DEPART</div><div style="color:rgba(255,255,255,.7);font-size:12px;margin-top:4px;">Delta Services - Constat au depart en location</div></div><div style="height:4px;background:linear-gradient(90deg,#1a2a6e,#c8102e);"></div><div style="padding:32px;"><p style="color:#1a2a6e;font-size:16px;font-weight:700;margin:0 0 20px;">Bonjour,</p><p style="color:#444;font-size:14px;line-height:1.6;margin:0 0 24px;">Veuillez trouver ci-dessous le constat d etat de votre nacelle <strong>${immat}</strong> au depart en location. Ce document fera reference lors de la restitution.</p><a href="${linkDepart}" style="display:block;background:#f8f9fb;border:2px solid #1a2a6e;border-radius:6px;padding:16px 20px;text-decoration:none;margin-bottom:24px;"><div style="color:#1a2a6e;font-weight:700;font-size:15px;">Consulter l etat de depart</div><div style="color:#888;font-size:12px;margin-top:4px;">Cliquez pour acceder au document</div></a><p style="color:#888;font-size:12px;">Pour toute question : <a href="mailto:assistanat.commerce@delta-services.fr" style="color:#1a2a6e;">assistanat.commerce@delta-services.fr</a></p></div><div style="background:#f8f9fb;border-top:1px solid #e0e4ea;padding:16px 32px;font-size:11px;color:#888;text-align:center;">DELTA SERVICES - 14 Avenue James de Rothschild - 77164 Ferrieres-en-Brie - Tel. +33 (0)1 60 95 47 80</div></div></body></html>`;
-    } else {
-      const linkRetour = await uploadToDrive(token, DRIVE_FOLDER_RETOUR, `Expertise_Retour_${immat}_${dateStr}`, htmlRetour);
-      subject = `Rapport de restitution - Nacelle ${immat}`;
-      emailHTML = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0;background:#f0f2f5;font-family:Arial,sans-serif;"><div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;"><div style="background:#1a2a6e;padding:28px 32px;"><div style="color:#fff;font-size:20px;font-weight:700;letter-spacing:2px;">RAPPORT DE RESTITUTION</div><div style="color:rgba(255,255,255,.7);font-size:12px;margin-top:4px;">Delta Services - Comparaison depart / retour</div></div><div style="height:4px;background:linear-gradient(90deg,#1a2a6e,#c8102e);"></div><div style="padding:32px;"><p style="color:#1a2a6e;font-size:16px;font-weight:700;margin:0 0 20px;">Bonjour,</p><p style="color:#444;font-size:14px;line-height:1.6;margin:0 0 24px;">Suite a la restitution de votre nacelle <strong>${immat}</strong>, veuillez trouver ci-dessous les deux constats d etat.</p><div style="margin-bottom:16px;"><a href="${linkDepart}" style="display:block;background:#f8f9fb;border:1px solid #e0e4ea;border-radius:6px;padding:16px 20px;text-decoration:none;margin-bottom:10px;"><div style="color:#1a2a6e;font-weight:700;font-size:14px;">Etat de depart</div><div style="color:#888;font-size:12px;margin-top:4px;">Constat d etat au depart en location</div></a><a href="${linkRetour}" style="display:block;background:#fff3f3;border:1px solid #f0c0c0;border-radius:6px;padding:16px 20px;text-decoration:none;"><div style="color:#c8102e;font-weight:700;font-size:14px;">Etat de retour</div><div style="color:#888;font-size:12px;margin-top:4px;">Constat d etat et degats constates au retour</div></a></div><p style="color:#888;font-size:12px;">Pour toute question : <a href="mailto:assistanat.commerce@delta-services.fr" style="color:#1a2a6e;">assistanat.commerce@delta-services.fr</a></p></div><div style="background:#f8f9fb;border-top:1px solid #e0e4ea;padding:16px 32px;font-size:11px;color:#888;text-align:center;">DELTA SERVICES - 14 Avenue James de Rothschild - 77164 Ferrieres-en-Brie - Tel. +33 (0)1 60 95 47 80</div></div></body></html>`;
+    let linkRetour = null;
+    if (!departOnly && htmlRetour) {
+      linkRetour = await uploadToDrive(token, DRIVE_FOLDER_RETOUR, `Expertise_Retour_${immat}_${dateStr}`, htmlRetour);
     }
 
-    const emailResp = await fetch("https://api.resend.com/emails", {
+    // 2. Envoyer email via Google Apps Script (Gmail)
+    const emailResp = await fetch(APPS_SCRIPT_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${RESEND_API_KEY}` },
-      body: JSON.stringify({ from: "Expertise Nacelle Delta Services <onboarding@resend.dev>", to: [to], cc: [EMAIL_CC], subject, html: emailHTML })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to, immat, linkDepart, linkRetour, departOnly: !!departOnly })
     });
 
-    if (!emailResp.ok) {
-      const err = await emailResp.json();
-      throw new Error(err.message || "Erreur envoi email");
-    }
+    const emailData = await emailResp.json();
+    if (emailData.error) throw new Error(emailData.error);
 
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+    return new Response(JSON.stringify({ ok: true, linkDepart, linkRetour }), {
+      status: 200,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
 
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
   }
 }
