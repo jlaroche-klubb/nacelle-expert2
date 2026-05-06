@@ -221,45 +221,70 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
 
     const barH = 120;
 
-    // Fond gris clair uniforme
+    // Fond gris clair
     ctx.fillStyle = "#f0f2f5";
     ctx.fillRect(0, 0, W, H);
 
     // Bande bleue Delta en bas
     ctx.fillStyle = "#1a2a6e";
     ctx.fillRect(0, H - barH, W, barH);
-
-    // Liseré rouge
     ctx.fillStyle = "#c8102e";
     ctx.fillRect(0, H - barH - 5, W, 5);
 
     const subject = new Image();
     subject.onload = () => {
-      // Nacelle centrée dans la zone au-dessus de la bande
+      // Analyser pixels pour trouver le contenu réel (bounding box)
+      const tmpC = document.createElement("canvas");
+      tmpC.width = subject.naturalWidth;
+      tmpC.height = subject.naturalHeight;
+      const tmpCtx = tmpC.getContext("2d");
+      tmpCtx.drawImage(subject, 0, 0);
+      const pixels = tmpCtx.getImageData(0, 0, tmpC.width, tmpC.height).data;
+
+      let minX = tmpC.width, maxX = 0, minY = tmpC.height, maxY = 0;
+      for (let y = 0; y < tmpC.height; y++) {
+        for (let x = 0; x < tmpC.width; x++) {
+          const a = pixels[(y * tmpC.width + x) * 4 + 3];
+          if (a > 20) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      const contentW = maxX - minX + 1;
+      const contentH = maxY - minY + 1;
+
+      // Zone disponible avec marge minimale de 16px
       const avail = H - barH - 5;
-      const margin = 40;
+      const margin = 16;
       const maxW = W - margin * 2;
       const maxH = avail - margin * 2;
-      const scale = Math.min(maxW / subject.naturalWidth, maxH / subject.naturalHeight);
-      const sw = subject.naturalWidth * scale;
-      const sh = subject.naturalHeight * scale;
+      const scale = Math.min(maxW / contentW, maxH / contentH);
+      const sw = contentW * scale;
+      const sh = contentH * scale;
       const sx = (W - sw) / 2;
       const sy = margin + (avail - margin * 2 - sh) / 2;
 
-      ctx.drawImage(subject, sx, sy, sw, sh);
+      // Dessiner uniquement le contenu recadré
+      ctx.drawImage(subject,
+        minX, minY, contentW, contentH,
+        sx, sy, sw, sh
+      );
 
       // Logo Delta blanc
       const logo = new Image();
       logo.onload = () => {
         const logoH = 62, logoW = (logo.naturalWidth / logo.naturalHeight) * logoH;
-        const tmpC = document.createElement("canvas");
-        tmpC.width = logoW; tmpC.height = logoH;
-        const tmpCtx = tmpC.getContext("2d");
-        tmpCtx.filter = "brightness(0) invert(1)";
-        tmpCtx.drawImage(logo, 0, 0, logoW, logoH);
-        ctx.drawImage(tmpC, 36, H - barH + (barH - logoH) / 2, logoW, logoH);
+        const tmpLogo = document.createElement("canvas");
+        tmpLogo.width = logoW; tmpLogo.height = logoH;
+        const lCtx = tmpLogo.getContext("2d");
+        lCtx.filter = "brightness(0) invert(1)";
+        lCtx.drawImage(logo, 0, 0, logoW, logoH);
+        ctx.drawImage(tmpLogo, 36, H - barH + (barH - logoH) / 2, logoW, logoH);
 
-        // Séparateur
         ctx.strokeStyle = "rgba(255,255,255,0.25)";
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -267,7 +292,6 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
         ctx.lineTo(logoW + 60, H - 18);
         ctx.stroke();
 
-        // Immatriculation
         if (immat) {
           ctx.fillStyle = "#ffffff";
           ctx.font = "700 32px monospace";
