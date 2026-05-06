@@ -259,7 +259,7 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
 
       // Zone disponible avec marge minimale de 16px
       const avail = H - barH - 5;
-      const margin = 16;
+      const margin = 4;
       const maxW = W - margin * 2;
       const maxH = avail - margin * 2;
       const scale = Math.min(maxW / contentW, maxH / contentH);
