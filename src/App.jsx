@@ -324,6 +324,46 @@ async function fbSaveDossier(data) {
 async function fbSaveConfig(id,data) { await setDoc(doc(db,"config",id),data); }
 async function fbGetConfig(id) { const snap=await getDocs(collection(db,"config")); const found=snap.docs.find(d=>d.id===id); return found?found.data():null; }
 
+async function generateDepartHTML(dossier) {
+  const info = dossier.info;
+  const dep = dossier.depart;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0;background:#f0f2f5;font-family:Arial,sans-serif;">
+  <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);">
+    <div style="background:#1a2a6e;padding:28px 32px;">
+      <div style="color:#fff;font-size:20px;font-weight:700;letter-spacing:2px;">ÉTAT DE DÉPART</div>
+      <div style="color:rgba(255,255,255,.7);font-size:12px;margin-top:4px;">Delta Services · Constat de départ en location</div>
+    </div>
+    <div style="height:4px;background:linear-gradient(90deg,#1a2a6e,#c8102e);"></div>
+    <div style="padding:32px;">
+      <p style="color:#1a2a6e;font-size:16px;font-weight:700;margin:0 0 20px;">Bonjour,</p>
+      <p style="color:#444;font-size:14px;line-height:1.6;margin:0 0 24px;">
+        Veuillez trouver ci-dessous le constat d'état de votre nacelle élévatrice au départ en location.
+      </p>
+      <div style="background:#f8f9fb;border:1px solid #e0e4ea;border-radius:6px;padding:20px;margin-bottom:24px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <tr><td style="padding:6px 0;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Immatriculation</td><td style="padding:6px 0;font-weight:700;color:#1a2a6e;">${dossier.immat}</td></tr>
+          <tr><td style="padding:6px 0;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Modèle porteur</td><td style="padding:6px 0;font-weight:600;">${info?.modele||'—'}</td></tr>
+          <tr><td style="padding:6px 0;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Type nacelle</td><td style="padding:6px 0;font-weight:600;">${info?.type_nacelle||'—'}</td></tr>
+          <tr><td style="padding:6px 0;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Client</td><td style="padding:6px 0;font-weight:600;">${info?.client||'—'}</td></tr>
+          <tr><td style="padding:6px 0;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Date départ</td><td style="padding:6px 0;font-weight:600;">${dep?.date||'—'}</td></tr>
+          <tr><td style="padding:6px 0;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Heures nacelle</td><td style="padding:6px 0;font-weight:600;">${dep?.heures||'—'} h</td></tr>
+          <tr><td style="padding:6px 0;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Km porteur</td><td style="padding:6px 0;font-weight:600;">${dep?.km_porteur||'—'} km</td></tr>
+          <tr><td style="padding:6px 0;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px;">Agent expert</td><td style="padding:6px 0;font-weight:600;">${dep?.agent||'—'}</td></tr>
+        </table>
+      </div>
+      <p style="color:#888;font-size:12px;line-height:1.6;margin:0;">
+        Ce document atteste de l'état du véhicule au moment de son départ en location.<br>
+        Pour toute question : <a href="mailto:assistanat.commerce@delta-services.fr" style="color:#1a2a6e;">assistanat.commerce@delta-services.fr</a>
+      </p>
+    </div>
+    <div style="background:#f8f9fb;border-top:1px solid #e0e4ea;padding:16px 32px;font-size:11px;color:#888;text-align:center;">
+      DELTA SERVICES · 14 Avenue James de Rothschild · 77164 Ferrières-en-Brie · Tél. +33 (0)1 60 95 47 80<br>
+      © ${new Date().getFullYear()} Delta Services · Tous droits réservés
+    </div>
+  </div>
+</body></html>`;
+}
+
 async function generateReportHTML(dossier, tarifs, zones, vetusteTaux) {
   const ret = dossier.retour;
   const info = dossier.info;
@@ -386,23 +426,21 @@ async function generateReportHTML(dossier, tarifs, zones, vetusteTaux) {
 
 async function sendExpertiseEmail(emailClient, dossier, tarifs, zones, vetusteTaux) {
   try {
-    const html = await generateReportHTML(dossier, tarifs, zones, vetusteTaux);
-    const resp = await fetch("https://api.resend.com/emails", {
+    const htmlRetour = await generateReportHTML(dossier, tarifs, zones, vetusteTaux);
+    const htmlDepart = await generateDepartHTML(dossier);
+    const resp = await fetch("/api/send-email", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${RESEND_API_KEY}`
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        from: "Expertise Nacelle Delta Services <onboarding@resend.dev>",
-        to: [emailClient],
-        cc: [EMAIL_CC],
-        subject: `Rapport d'expertise nacelle · ${dossier.immat}`,
-        html: html
+        to: emailClient,
+        cc: EMAIL_CC,
+        immat: dossier.immat,
+        htmlRetour,
+        htmlDepart
       })
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.message || "Erreur Resend");
+    if (!resp.ok) throw new Error(data.error || "Erreur envoi");
     return { ok: true };
   } catch(e) {
     console.error("Email error:", e);
@@ -667,7 +705,7 @@ export default function App() {
                     <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
                   </div>
                   <div className="g3" style={{marginBottom:12}}>
-                    <div><label>Date mise en circulation</label><input type="number" value={depForm.annee_fab} onChange={e=>setDepForm({...depForm,annee_fab:e.target.value})} placeholder="2019"/></div>
+                    <div><label>Date mise en circulation</label><input type="text" value={depForm.annee_fab} onChange={e=>setDepForm({...depForm,annee_fab:e.target.value})} placeholder="JJ/MM/AAAA"/></div>
                     <div><label>N° Contrat</label><input value={depForm.contrat} onChange={e=>setDepForm({...depForm,contrat:e.target.value})} placeholder="CTR-2024-055"/></div>
                     <div><label>Client</label><input value={depForm.client} onChange={e=>setDepForm({...depForm,client:e.target.value})} placeholder="Société / client"/></div>
                   </div>
