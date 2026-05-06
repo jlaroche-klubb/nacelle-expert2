@@ -664,10 +664,10 @@ export default function App() {
                   <div className="g3" style={{marginBottom:12}}>
                     <div><label>Immatriculation *</label><input value={depForm.immat} onChange={e=>setDepForm({...depForm,immat:e.target.value.toUpperCase()})} placeholder="AB-123-CD"/></div>
                     <div><label>Type nacelle</label><input value={depForm.type_nacelle} onChange={e=>setDepForm({...depForm,type_nacelle:e.target.value})} placeholder="KL32, KL21B..."/></div>
-                    <div><label>Modèle</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
+                    <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
                   </div>
                   <div className="g3" style={{marginBottom:12}}>
-                    <div><label>Année fabrication</label><input type="number" value={depForm.annee_fab} onChange={e=>setDepForm({...depForm,annee_fab:e.target.value})} placeholder="2019"/></div>
+                    <div><label>Date mise en circulation</label><input type="number" value={depForm.annee_fab} onChange={e=>setDepForm({...depForm,annee_fab:e.target.value})} placeholder="2019"/></div>
                     <div><label>N° Contrat</label><input value={depForm.contrat} onChange={e=>setDepForm({...depForm,contrat:e.target.value})} placeholder="CTR-2024-055"/></div>
                     <div><label>Client</label><input value={depForm.client} onChange={e=>setDepForm({...depForm,client:e.target.value})} placeholder="Société / client"/></div>
                   </div>
@@ -729,34 +729,13 @@ export default function App() {
   const f=await pickFile({multiple:false});
   if(!f) return;
   await addPhotos(f,key,setDepPhotos);
-  // Détourage automatique pour 3/4 Avant Droit et 3/4 Arrière Gauche
-  if(COMMERCIAL_ANGLES.includes(angle.key)) {
-    setProcessingPhoto(angle.key);
-    const b64 = await photoToBase64(Array.from(f)[0]);
-    const removed = await removeBackground(b64);
-    if(removed) {
-      const composed = await composeCommercialPhoto(removed, depForm.immat, DELTA_LOGO);
-      if(composed) setCommercialPhotos(prev=>({...prev,[angle.key]:composed}));
-    }
-    setProcessingPhoto(null);
-  }
 }}>+</div>)}
                                     <div style={{flex:1}}>
                                       <div style={{fontSize:11,color:"var(--muted)",lineHeight:1.6,marginBottom:6}}>{angle.key==="av_droit"?"Avant droit, ~5m":angle.key==="av_gauche"?"Avant gauche, ~5m":angle.key==="ar_gauche"?"Arrière gauche, ~5m":"Arrière droit, ~5m"}</div>
-                                      {COMMERCIAL_ANGLES.includes(angle.key)&&(
-                                        <div style={{fontSize:10,color:"var(--primary)",fontWeight:600,letterSpacing:1}}>📷 Photo commerciale auto</div>
-                                      )}
+
                                     </div>
                                   </div>
-                                  {COMMERCIAL_ANGLES.includes(angle.key)&&commercialPhotos[angle.key]&&(
-                                    <div style={{marginTop:10,padding:"10px",background:"#f0f4ff",border:"1px solid rgba(26,42,110,.2)"}}>
-                                      <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:6,fontWeight:700}}>✓ Photo commerciale générée</div>
-                                      <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                                        <img src={commercialPhotos[angle.key]} alt="commercial" style={{width:160,height:90,objectFit:"cover",border:"1px solid var(--border2)"}}/>
-                                        <a href={commercialPhotos[angle.key]} download={`${depForm.immat||"nacelle"}_${angle.label.replace(/ /g,"_")}_commercial.jpg`} style={{padding:"8px 14px",background:"var(--primary)",color:"#fff",fontSize:11,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",textDecoration:"none",display:"inline-block"}}>⬇ Télécharger</a>
-                                      </div>
-                                    </div>
-                                  )}
+
                                 </div>
                               );
                             })}
@@ -801,7 +780,7 @@ export default function App() {
                 </div>
                 <div className="card" style={{marginBottom:10}}>
                   <div className="g3">
-                    {[["Immatriculation",depForm.immat],["Type nacelle",depForm.type_nacelle],["Modèle porteur",depForm.modele],["Année fabrication",depForm.annee_fab],["Client",depForm.client],["Contrat",depForm.contrat],["Email",depForm.email],["Date",depForm.date],["Heures nacelle",depForm.heures?depForm.heures+" h":"—"],["Km porteur",depForm.km_porteur?depForm.km_porteur+" km":"—"],["Agent",depForm.agent]].map(([k,v])=>(
+                    {[["Immatriculation",depForm.immat],["Type nacelle",depForm.type_nacelle],["Modèle porteur",depForm.modele],["Mise en circulation",depForm.annee_fab],["Client",depForm.client],["Contrat",depForm.contrat],["Email",depForm.email],["Date",depForm.date],["Heures nacelle",depForm.heures?depForm.heures+" h":"—"],["Km porteur",depForm.km_porteur?depForm.km_porteur+" km":"—"],["Agent",depForm.agent]].map(([k,v])=>(
                       <div key={k} style={{marginBottom:6}}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
                     ))}
                   </div>
@@ -871,7 +850,7 @@ export default function App() {
                     <div className="card" style={{marginBottom:14,border:"2px solid var(--primary)"}}>
                       <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:10,fontWeight:700}}>Dossier trouvé</div>
                       <div className="g3">
-                        {[["Immatriculation",foundDossier.immat],["Type nacelle",foundDossier.info?.type_nacelle],["Modèle porteur",foundDossier.info?.modele],["Client",foundDossier.info?.client],["Contrat",foundDossier.info?.contrat],["Départ",foundDossier.depart?.date],["Année fabrication",foundDossier.info?.annee_fab],["Heures départ",foundDossier.depart?.heures?foundDossier.depart.heures+" h":"—"],["Km porteur départ",foundDossier.depart?.km_porteur?foundDossier.depart.km_porteur+" km":"—"]].map(([k,v])=>(
+                        {[["Immatriculation",foundDossier.immat],["Type nacelle",foundDossier.info?.type_nacelle],["Modèle porteur",foundDossier.info?.modele],["Client",foundDossier.info?.client],["Contrat",foundDossier.info?.contrat],["Départ",foundDossier.depart?.date],["Mise en circulation",foundDossier.info?.annee_fab],["Heures départ",foundDossier.depart?.heures?foundDossier.depart.heures+" h":"—"],["Km porteur départ",foundDossier.depart?.km_porteur?foundDossier.depart.km_porteur+" km":"—"]].map(([k,v])=>(
                           <div key={k}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
                         ))}
                       </div>
@@ -1112,7 +1091,7 @@ export default function App() {
             </div>
             <div className="card" style={{marginBottom:10}}>
               <div className="g3">
-                {[["Immatriculation",activeDossier.immat],["Type nacelle",activeDossier.info?.type_nacelle],["Modèle porteur",activeDossier.info?.modele],["Année fabrication",activeDossier.info?.annee_fab],["Client",activeDossier.info?.client],["Contrat",activeDossier.info?.contrat],["Email",activeDossier.info?.email],["Date départ",activeDossier.depart?.date],["Date retour",activeDossier.retour?.date||"—"],["Durée",activeDossier.depart?.date&&activeDossier.retour?.date?(()=>{const d=Math.round((new Date(activeDossier.retour.date)-new Date(activeDossier.depart.date))/864e5);return d+" jour"+(d>1?"s":"");})():"—"],["Heures départ",activeDossier.depart?.heures?activeDossier.depart.heures+" h":"—"],["Heures retour",activeDossier.retour?.heures?activeDossier.retour.heures+" h":"—"],["Heures utilisées",activeDossier.depart?.heures&&activeDossier.retour?.heures?(parseInt(activeDossier.retour.heures)-parseInt(activeDossier.depart.heures))+" h":"—"],["Km porteur départ",activeDossier.depart?.km_porteur?activeDossier.depart.km_porteur+" km":"—"],["Km porteur retour",activeDossier.retour?.km_porteur?activeDossier.retour.km_porteur+" km":"—"],["Km parcourus",activeDossier.depart?.km_porteur&&activeDossier.retour?.km_porteur?(parseInt(activeDossier.retour.km_porteur)-parseInt(activeDossier.depart.km_porteur))+" km":"—"]].map(([k,v])=>(
+                {[["Immatriculation",activeDossier.immat],["Type nacelle",activeDossier.info?.type_nacelle],["Modèle porteur",activeDossier.info?.modele],["Mise en circulation",activeDossier.info?.annee_fab],["Client",activeDossier.info?.client],["Contrat",activeDossier.info?.contrat],["Email",activeDossier.info?.email],["Date départ",activeDossier.depart?.date],["Date retour",activeDossier.retour?.date||"—"],["Durée",activeDossier.depart?.date&&activeDossier.retour?.date?(()=>{const d=Math.round((new Date(activeDossier.retour.date)-new Date(activeDossier.depart.date))/864e5);return d+" jour"+(d>1?"s":"");})():"—"],["Heures départ",activeDossier.depart?.heures?activeDossier.depart.heures+" h":"—"],["Heures retour",activeDossier.retour?.heures?activeDossier.retour.heures+" h":"—"],["Heures utilisées",activeDossier.depart?.heures&&activeDossier.retour?.heures?(parseInt(activeDossier.retour.heures)-parseInt(activeDossier.depart.heures))+" h":"—"],["Km porteur départ",activeDossier.depart?.km_porteur?activeDossier.depart.km_porteur+" km":"—"],["Km porteur retour",activeDossier.retour?.km_porteur?activeDossier.retour.km_porteur+" km":"—"],["Km parcourus",activeDossier.depart?.km_porteur&&activeDossier.retour?.km_porteur?(parseInt(activeDossier.retour.km_porteur)-parseInt(activeDossier.depart.km_porteur))+" km":"—"]].map(([k,v])=>(
                   <div key={k} style={{marginBottom:6}}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
                 ))}
               </div>
