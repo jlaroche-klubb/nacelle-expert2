@@ -237,28 +237,25 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
     const subject = new Image();
     subject.onload = () => {
       // Analyser les pixels pour trouver le vrai bas (roues)
-      const tmpC = document.createElement("canvas");
-      const preScale = Math.min(W / subject.naturalWidth, (H - barH - 5) / subject.naturalHeight);
-      tmpC.width = Math.round(subject.naturalWidth * preScale);
-      tmpC.height = Math.round(subject.naturalHeight * preScale);
-      const tmpCtx = tmpC.getContext("2d");
-      tmpCtx.drawImage(subject, 0, 0, tmpC.width, tmpC.height);
-      const pixels = tmpCtx.getImageData(0, 0, tmpC.width, tmpC.height).data;
-
-      // Dernière ligne opaque = bas des roues
-      let bottomRow = tmpC.height - 1;
-      outer: for (let y = tmpC.height - 1; y >= 0; y--) {
-        for (let x = 0; x < tmpC.width; x++) {
-          if (pixels[(y * tmpC.width + x) * 4 + 3] > 30) { bottomRow = y; break outer; }
+      let bottomRow = subject.naturalHeight - 1;
+      try {
+        const tmpC = document.createElement("canvas");
+        const preScale = Math.min(W / subject.naturalWidth, (H - barH - 5) / subject.naturalHeight);
+        tmpC.width = Math.max(1, Math.round(subject.naturalWidth * preScale));
+        tmpC.height = Math.max(1, Math.round(subject.naturalHeight * preScale));
+        const tmpCtx = tmpC.getContext("2d");
+        tmpCtx.drawImage(subject, 0, 0, tmpC.width, tmpC.height);
+        const pixels = tmpCtx.getImageData(0, 0, tmpC.width, tmpC.height).data;
+        let found = false;
+        for (let y = tmpC.height - 1; y >= 0 && !found; y--) {
+          for (let x = 0; x < tmpC.width; x++) {
+            if (pixels[(y * tmpC.width + x) * 4 + 3] > 30) {
+              bottomRow = y / tmpC.height * subject.naturalHeight;
+              found = true; break;
+            }
+          }
         }
-      }
-      // Première ligne opaque = haut
-      let topRow = 0;
-      outer2: for (let y = 0; y < tmpC.height; y++) {
-        for (let x = 0; x < tmpC.width; x++) {
-          if (pixels[(y * tmpC.width + x) * 4 + 3] > 30) { topRow = y; break outer2; }
-        }
-      }
+      } catch(e) { bottomRow = subject.naturalHeight - 1; }
 
       // Nacelle très grande — 96% de la largeur, très peu de marge
       const margin = 20; // px de marge autour
@@ -272,7 +269,7 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
 
       // Centrage horizontal, bas des roues en bas de la zone disponible
       const sx = (W - sw) / 2;
-      const bottomOffsetPx = (tmpC.height - 1 - bottomRow) / tmpC.height * sh;
+      const bottomOffsetPx = (subject.naturalHeight - 1 - bottomRow) / subject.naturalHeight * sh;
       const floorY = H - barH - 5 - margin;
       const sy = floorY - sh + bottomOffsetPx;
 
