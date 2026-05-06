@@ -254,14 +254,6 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
         }
       }
 
-      // Crop agressif : on serre de 5% de chaque côté
-      const pad = 0.05;
-      const cropX = Math.floor(pad * (maxX - minX));
-      const cropY = Math.floor(pad * (maxY - minY));
-      minX = Math.min(minX + cropX, maxX);
-      maxX = Math.max(maxX - cropX, minX);
-      minY = Math.min(minY + cropY, maxY);
-      maxY = Math.max(maxY - cropY, minY);
       const contentW = maxX - minX + 1;
       const contentH = maxY - minY + 1;
 
