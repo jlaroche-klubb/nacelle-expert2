@@ -340,6 +340,8 @@ export default function App() {
   const [retDegats,setRetDegats]=useState([]);
   const [retNote,setRetNote]=useState("");
   const [retStep,setRetStep]=useState(0);
+  const [retCommercialPhotos,setRetCommercialPhotos]=useState({});
+  const [retProcessingPhoto,setRetProcessingPhoto]=useState(null);
   const [searchImmat,setSearchImmat]=useState("");
   const [foundDossier,setFoundDossier]=useState(null);
   const [searchDone,setSearchDone]=useState(false);
@@ -406,7 +408,7 @@ export default function App() {
     return matchQ && matchStatut;
   });
 
-  function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setCommercialPhotos({});setProcessingPhoto(null); }
+  function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setCommercialPhotos({});setProcessingPhoto(null);setRetCommercialPhotos({});setRetProcessingPhoto(null); }
 
   return (
     <div style={{minHeight:"100vh",background:"var(--bg)"}}>
@@ -742,7 +744,7 @@ export default function App() {
                         await fbSaveDossier(d);
                         setDossiers(prev=>({...prev,[d.immat]:d}));
                         setFoundDossier(d);
-                        setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetStep(1);
+                        setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setRetStep(1);
                       }}>+ Créer retour sans départ</button>
                     </div>
                   </div>
@@ -771,7 +773,7 @@ export default function App() {
                     </div>
                     <div style={{display:"flex",justifyContent:"space-between"}}>
                       <button className="btn btn-outline" onClick={()=>{setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>← Annuler</button>
-                      <button className="btn btn-gold" onClick={()=>{setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetStep(1);}}>Démarrer expertise retour →</button>
+                      <button className="btn btn-gold" onClick={()=>{setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setRetStep(1);}}>Démarrer expertise retour →</button>
                     </div>
                   </div>
                 )}
@@ -816,7 +818,40 @@ export default function App() {
                                       </div>
                                       <div style={{flex:1,padding:10,background:"#fff",borderLeft:"1px solid var(--border)"}}>
                                         <div style={{fontSize:9,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:6}}>Retour</div>
-                                        {retPhoto?(<div style={{position:"relative",display:"inline-block"}}><img src={retPhoto.url} alt="" style={{width:"100%",maxWidth:160,height:110,objectFit:"cover",border:"1px solid var(--border2)"}}/><button className="btn btn-danger" onClick={()=>removePhoto(key,0,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:9}}>✕</button></div>):(<div className="photo-add" style={{width:120,height:88}} onClick={async()=>{const f=await pickFile({multiple:false});if(f) addPhotos(f,key,setRetPhotos);}}>+</div>)}
+                                        {retPhoto?(
+                                          <div>
+                                            <div style={{position:"relative",display:"inline-block"}}><img src={retPhoto.url} alt="" style={{width:"100%",maxWidth:160,height:110,objectFit:"cover",border:"1px solid var(--border2)"}}/><button className="btn btn-danger" onClick={()=>removePhoto(key,0,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:9}}>✕</button></div>
+                                            {COMMERCIAL_ANGLES.includes(angle.key)&&retCommercialPhotos[angle.key]&&(
+                                              <div style={{marginTop:8,padding:"10px",background:"#f0f4ff",border:"1px solid rgba(26,42,110,.2)"}}>
+                                                <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:6,fontWeight:700}}>✓ Photo commerciale</div>
+                                                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                                                  <img src={retCommercialPhotos[angle.key]} alt="commercial" style={{width:140,height:80,objectFit:"cover",border:"1px solid var(--border2)"}}/>
+                                                  <a href={retCommercialPhotos[angle.key]} download={`${foundDossier?.immat||"nacelle"}_${angle.label.replace(/ /g,"_")}_commercial.jpg`} style={{padding:"8px 12px",background:"var(--primary)",color:"#fff",fontSize:11,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",textDecoration:"none",display:"inline-block"}}>⬇ Télécharger</a>
+                                                </div>
+                                              </div>
+                                            )}
+                                            {COMMERCIAL_ANGLES.includes(angle.key)&&retProcessingPhoto===angle.key&&(
+                                              <div style={{marginTop:8,padding:"10px",background:"#f0f4ff",border:"1px solid rgba(26,42,110,.2)",display:"flex",alignItems:"center",gap:8}}>
+                                                <div style={{display:"flex",gap:4}}>{[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:"var(--primary)",animation:"aiPulse 1.2s ease-in-out infinite",animationDelay:i*0.2+"s"}}/>)}</div>
+                                                <div style={{fontSize:11,color:"var(--primary)"}}>Génération photo commerciale...</div>
+                                              </div>
+                                            )}
+                                          </div>
+                                        ):(<div className="photo-add" style={{width:120,height:88}} onClick={async()=>{
+                                          const f=await pickFile({multiple:false});
+                                          if(!f) return;
+                                          await addPhotos(f,key,setRetPhotos);
+                                          if(COMMERCIAL_ANGLES.includes(angle.key)) {
+                                            setRetProcessingPhoto(angle.key);
+                                            const b64=await photoToBase64(Array.from(f)[0]);
+                                            const removed=await removeBackground(b64);
+                                            if(removed) {
+                                              const composed=await composeCommercialPhoto(removed,foundDossier?.immat,DELTA_LOGO);
+                                              if(composed) setRetCommercialPhotos(prev=>({...prev,[angle.key]:composed}));
+                                            }
+                                            setRetProcessingPhoto(null);
+                                          }
+                                        }}>+</div>)}
                                       </div>
                                     </div>
                                   </div>
