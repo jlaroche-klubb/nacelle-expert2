@@ -25,18 +25,16 @@ async function openEmailClient(emailTo, immat, reportType = "depart") {
   
   if (isMobile && navigator.share && navigator.canShare) {
     try {
-      // Show loading indicator
-      const originalText = event?.target?.textContent;
-      if (event?.target) event.target.textContent = "Génération PDF...";
-      
       // Dynamically load html2pdf library
       if (!window.html2pdf) {
         const script = document.createElement('script');
         script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
         await new Promise((resolve, reject) => {
           script.onload = resolve;
-          script.onerror = reject;
+          script.onerror = () => reject(new Error('Échec chargement librairie PDF'));
           document.head.appendChild(script);
+          // Timeout after 10 seconds
+          setTimeout(() => reject(new Error('Timeout chargement PDF')), 10000);
         });
       }
       
@@ -52,9 +50,6 @@ async function openEmailClient(emailTo, immat, reportType = "depart") {
       
       const pdfBlob = await window.html2pdf().set(opt).from(element).outputPdf('blob');
       const file = new File([pdfBlob], filename, { type: 'application/pdf' });
-      
-      // Reset button text
-      if (event?.target && originalText) event.target.textContent = originalText;
       
       // Check if we can share files
       if (navigator.canShare({ files: [file] })) {
@@ -79,8 +74,8 @@ async function openEmailClient(emailTo, immat, reportType = "depart") {
       }
     } catch (error) {
       console.error('Share error:', error);
-      // Reset button and fallback to mailto
-      if (event?.target && originalText) event.target.textContent = originalText;
+      alert('Erreur génération PDF: ' + error.message + '\n\nUtilisez le bouton "PDF" puis "Email" séparément.');
+      // Fallback to simple mailto
       const mailtoLink = `mailto:${emailTo}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}&cc=${EMAIL_CC}`;
       window.open(mailtoLink, '_blank');
     }
