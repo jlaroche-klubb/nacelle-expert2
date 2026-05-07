@@ -8,15 +8,13 @@ import { getFirestore } from "firebase/firestore";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getStorage } from "firebase/storage";
 
-// IMPORTANT : Remplacez par vos vraies valeurs Firebase
-// (Gardez celles du projet existant nacelle-expert)
 const firebaseConfig = {
-  apiKey: "VOTRE_API_KEY",
-  authDomain: "VOTRE_PROJECT.firebaseapp.com",
-  projectId: "VOTRE_PROJECT_ID",
-  storageBucket: "VOTRE_PROJECT.appspot.com",
-  messagingSenderId: "VOTRE_SENDER_ID",
-  appId: "VOTRE_APP_ID"
+  apiKey: "AIzaSyCmo1rTFoy1KnUc1rh_QVMtutwLguKnGb8",
+  authDomain: "nacelle-expert.firebaseapp.com",
+  projectId: "nacelle-expert",
+  storageBucket: "nacelle-expert.firebasestorage.app",
+  messagingSenderId: "839235044652",
+  appId: "1:839235044652:web:ad99f43eae0527239b1889"
 };
 
 const app = initializeApp(firebaseConfig);
