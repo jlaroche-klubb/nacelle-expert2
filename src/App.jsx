@@ -52,7 +52,7 @@ async function openEmailClient(emailTo, immat, reportType = "depart") {
   
   let body = isDepart
     ? `Bonjour,\n\nVeuillez trouver ci-dessous le constat d'état de départ de la nacelle ${immat}.\n\nCe document fera référence lors de la restitution.\n\n`
-    : `Bonjour,\n\nSuite à la restitution de la nacelle ${immat}, veuillez trouver ci-dessous les constats d'état.\n\n`;
+    : `Bonjour,\n\nSuite à la restitution de la nacelle ${immat}, veuillez trouver ci-dessous le rapport complet (départ + retour).\n\n`;
   
   // Check if mobile
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
