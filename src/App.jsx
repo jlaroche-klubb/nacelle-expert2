@@ -579,14 +579,28 @@ export default function App() {
   // Auth listener
   useEffect(()=>{
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      console.log("🔐 Auth state changed:", user?.email, "UID:", user?.uid);
       setCurrentUser(user);
       if(user){
         // Load user profile from Firestore
-        const userDoc = await getDoc(doc(db, "users", user.uid));
-        if(userDoc.exists()){
-          setUserProfile(userDoc.data());
+        try {
+          console.log("📄 Fetching user profile for UID:", user.uid);
+          const userDoc = await getDoc(doc(db, "users", user.uid));
+          console.log("📄 User doc exists?", userDoc.exists());
+          if(userDoc.exists()){
+            const profile = userDoc.data();
+            console.log("✅ User profile loaded:", profile);
+            setUserProfile(profile);
+          } else {
+            console.log("❌ No user profile found in Firestore for UID:", user.uid);
+            setUserProfile(null);
+          }
+        } catch(error) {
+          console.error("❌ Error loading user profile:", error);
+          setUserProfile(null);
         }
       } else {
+        console.log("🚪 No user logged in");
         setUserProfile(null);
       }
       setAuthLoading(false);
