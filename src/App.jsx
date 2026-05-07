@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
-import { db } from "./firebase";
-import { collection, doc, setDoc, getDocs, deleteDoc } from "firebase/firestore";
+import { db, auth, googleProvider } from "./firebase";
+import { collection, doc, setDoc, getDocs, deleteDoc, getDoc, updateDoc } from "firebase/firestore";
 import { getStorage, ref, uploadString, getDownloadURL } from "firebase/storage";
+import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 
 const ADMIN_PASSWORD = "nacelle2024";
 const EMAIL_CC = "assistanat.commerce@delta-services.fr";
@@ -557,6 +558,15 @@ export default function App() {
   const [emailClient,setEmailClient]=useState("");
   const [emailSending,setEmailSending]=useState(false);
   const [emailSent,setEmailSent]=useState(false);
+
+  // Auth states
+  const [currentUser,setCurrentUser]=useState(null);
+  const [userProfile,setUserProfile]=useState(null);
+  const [authLoading,setAuthLoading]=useState(true);
+  const [users,setUsers]=useState([]);
+  const [showUserManagement,setShowUserManagement]=useState(false);
+  const [userForm,setUserForm]=useState({email:"",nom:"",prenom:"",role:"expert"});
+  const [editingUser,setEditingUser]=useState(null);
   const [retStep,setRetStep]=useState(0);
   const [retCommercialPhotos,setRetCommercialPhotos]=useState({});
   const [retProcessingPhoto,setRetProcessingPhoto]=useState(null);
@@ -565,6 +575,34 @@ export default function App() {
   const [searchDone,setSearchDone]=useState(false);
 
   useEffect(()=>{ loadAll(); },[]);
+  
+  // Auth listener
+  useEffect(()=>{
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setCurrentUser(user);
+      if(user){
+        // Load user profile from Firestore
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        if(userDoc.exists()){
+          setUserProfile(userDoc.data());
+        }
+      } else {
+        setUserProfile(null);
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  },[]);
+
+  // Auto-fill agent field when user profile loads
+  useEffect(()=>{
+    if(userProfile){
+      const fullName = `${userProfile.prenom} ${userProfile.nom}`;
+      setDepForm(prev=>({...prev,agent:fullName}));
+      setRetForm(prev=>({...prev,agent:fullName}));
+    }
+  },[userProfile]);
+
   async function loadAll() {
     setLoading(true);
     try {
@@ -575,18 +613,107 @@ export default function App() {
     setLoading(false);
   }
 
+  // Auth functions
+  async function handleGoogleLogin() {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch(error) {
+      console.error("Login error:", error);
+      alert("Erreur de connexion : " + error.message);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await signOut(auth);
+    } catch(error) {
+      console.error("Logout error:", error);
+    }
+  }
+
+  async function loadUsers() {
+    try {
+      const snap = await getDocs(collection(db, "users"));
+      const result = [];
+      snap.docs.forEach(d => result.push({uid: d.id, ...d.data()}));
+      setUsers(result);
+    } catch(error) {
+      console.error("Error loading users:", error);
+    }
+  }
+
+  async function createUser(userData) {
+    try {
+      // Note: En production, il faudrait une Cloud Function pour créer le compte Firebase Auth
+      // Pour l'instant, on sauvegarde juste les infos et l'utilisateur devra se connecter avec Google
+      const userId = userData.email.replace(/[@.]/g, '_');
+      await setDoc(doc(db, "users", userId), {
+        ...userData,
+        createdAt: new Date().toISOString()
+      });
+      setAdminMsg("Utilisateur créé !");
+      setTimeout(() => setAdminMsg(""), 3000);
+      loadUsers();
+      setUserForm({email:"",nom:"",prenom:"",role:"expert"});
+    } catch(error) {
+      console.error("Error creating user:", error);
+      alert("Erreur : " + error.message);
+    }
+  }
+
+  async function updateUser(uid, userData) {
+    try {
+      await updateDoc(doc(db, "users", uid), userData);
+      setAdminMsg("Utilisateur modifié !");
+      setTimeout(() => setAdminMsg(""), 3000);
+      loadUsers();
+      setEditingUser(null);
+    } catch(error) {
+      console.error("Error updating user:", error);
+      alert("Erreur : " + error.message);
+    }
+  }
+
+  async function deleteUser(uid) {
+    if(!confirm("Supprimer cet utilisateur ?")) return;
+    try {
+      await deleteDoc(doc(db, "users", uid));
+      setAdminMsg("Utilisateur supprimé !");
+      setTimeout(() => setAdminMsg(""), 3000);
+      loadUsers();
+    } catch(error) {
+      console.error("Error deleting user:", error);
+      alert("Erreur : " + error.message);
+    }
+  }
+
   async function addPhotos(files,zoneId,setter) { const arr=[]; for(const f of Array.from(files)) arr.push({name:f.name,url:await photoToBase64(f)}); setter(prev=>({...prev,[zoneId]:[...(prev[zoneId]||[]),...arr]})); }
   function removePhoto(zoneId,idx,setter) { setter(prev=>({...prev,[zoneId]:prev[zoneId].filter((_,i)=>i!==idx)})); }
   function setZE(setter,zoneId,etat) { setter(prev=>({...prev,[zoneId]:{...(prev[zoneId]||{}),etat}})); }
   function setZN(setter,zoneId,note) { setter(prev=>({...prev,[zoneId]:{...(prev[zoneId]||{}),note}})); }
 
   async function saveDepart() {
-    const data={id:genId(),immat:depForm.immat,info:{...depForm},depart:{zones:depZones,photos:depPhotos,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent},retour:null,createdAt:new Date().toISOString()};
+    const data={
+      id:genId(),
+      immat:depForm.immat,
+      info:{...depForm},
+      depart:{zones:depZones,photos:depPhotos,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent},
+      retour:null,
+      createdAt:new Date().toISOString(),
+      createdBy: currentUser?.uid || null,
+      createdByName: userProfile ? `${userProfile.prenom} ${userProfile.nom}` : depForm.agent
+    };
     await fbSaveDossier(data); setDossiers(prev=>({...prev,[data.immat]:data})); return data;
   }
   async function saveRetour() {
     if(!foundDossier) return;
-    const updated={...foundDossier,retour:{zones:retZones,photos:retPhotos,degats:retDegats,note:retNote,date:retForm.date,heures:retForm.heures,km_porteur:retForm.km_porteur,agent:retForm.agent},updatedAt:new Date().toISOString()};
+    const updated={
+      ...foundDossier,
+      retour:{zones:retZones,photos:retPhotos,degats:retDegats,note:retNote,date:retForm.date,heures:retForm.heures,km_porteur:retForm.km_porteur,agent:retForm.agent},
+      updatedAt:new Date().toISOString(),
+      updatedBy: currentUser?.uid || null,
+      updatedByName: userProfile ? `${userProfile.prenom} ${userProfile.nom}` : retForm.agent
+    };
     await fbSaveDossier(updated); setDossiers(prev=>({...prev,[updated.immat]:updated})); setActiveDossier(updated); return updated;
   }
 
@@ -628,6 +755,58 @@ export default function App() {
 
   function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setCommercialPhotos({});setProcessingPhoto(null);setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient("");setEmailSent(false);setDepEmailSent(false);setDepEmailSending(false); }
 
+  // Show loading while checking auth
+  if(authLoading) {
+    return (
+      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--bg)"}}>
+        <style>{css}</style>
+        <div style={{textAlign:"center"}}>
+          <div className="spinner" style={{margin:"0 auto 16px"}}/>
+          <div style={{color:"var(--muted)"}}>Chargement...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show login page if not authenticated
+  if(!currentUser || !userProfile) {
+    return (
+      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg, var(--primary) 0%, #1a3a5c 100%)"}}>
+        <style>{css}</style>
+        <div style={{maxWidth:400,width:"100%",padding:24}}>
+          <div className="card" style={{textAlign:"center",padding:48}}>
+            <img src={DELTA_LOGO} alt="Delta Services" style={{height:60,objectFit:"contain",marginBottom:24}}/>
+            <div style={{fontFamily:"'Share Tech Mono'",fontSize:20,letterSpacing:2,color:"var(--primary)",marginBottom:8}}>EXPERTISE NACELLE</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:32}}>Système d'expertise PEMP · Delta Services</div>
+            
+            {!currentUser ? (
+              <>
+                <button className="btn btn-primary" style={{width:"100%",marginBottom:16}} onClick={handleGoogleLogin}>
+                  <span style={{marginRight:8}}>🔐</span>
+                  Se connecter avec Google
+                </button>
+                <div style={{fontSize:11,color:"var(--muted)"}}>
+                  Connexion réservée aux utilisateurs autorisés
+                </div>
+              </>
+            ) : (
+              <div style={{color:"var(--muted)",fontSize:13}}>
+                <div style={{marginBottom:16}}>✉️ {currentUser.email}</div>
+                <div style={{marginBottom:16,color:"var(--accent)"}}>
+                  ⚠️ Votre compte n'est pas encore autorisé.<br/>
+                  Contactez l'administrateur.
+                </div>
+                <button className="btn btn-outline btn-sm" onClick={handleLogout}>
+                  Se déconnecter
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{minHeight:"100vh",background:"var(--bg)"}}>
       <style>{css}</style>
@@ -640,12 +819,18 @@ export default function App() {
             <div className="header-subtitle" style={{fontSize:10,letterSpacing:2,color:"rgba(255,255,255,.6)",textTransform:"uppercase"}}>Système d'expertise PEMP · Delta Services</div>
           </div>
         </div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {userProfile && (
+            <div style={{color:"rgba(255,255,255,.8)",fontSize:12,marginRight:8}}>
+              👤 {userProfile.prenom} {userProfile.nom}
+            </div>
+          )}
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={()=>{setAdminOpen(true);setAdminAuthed(false);setAdminPwd("");}}>⚙</button>
           {view==="home"&&<>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>Expertise Retour</button>
-            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});setDepZones({});setDepPhotos({});}}>+ Nouveau départ</button>
+            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepPhotos({});}}>+ Nouveau départ</button>
           </>}
+          <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={handleLogout} title="Déconnexion">🚪</button>
         </div>
       </div>
 
@@ -1317,7 +1502,7 @@ export default function App() {
                   <button className="btn btn-icon" onClick={()=>{setAdminOpen(false);setAdminAuthed(false);}}>✕</button>
                 </div>
                 <div style={{display:"flex",borderBottom:"2px solid var(--primary)",marginBottom:18}}>
-                  {[["zones","Zones"],["tarifs","Postes tarifaires"],["dossiers","Dossiers"]].map(([id,label])=>(<div key={id} className={`tab ${adminTab===id?"active":""}`} onClick={()=>{setAdminTab(id);setZoneEdit(null);setTarifEdit(null);}}>{label}</div>))}
+                  {[[" zones","Zones"],["tarifs","Postes tarifaires"],["dossiers","Dossiers"],["users","Utilisateurs"]].map(([id,label])=>(<div key={id} className={`tab ${adminTab===id?"active":""}`} onClick={()=>{setAdminTab(id);setZoneEdit(null);setTarifEdit(null);loadUsers();}}>{label}</div>))}
                 </div>
                 {adminMsg&&<div style={{padding:"8px 12px",background:"rgba(48,160,80,.1)",color:"#208040",border:"1px solid rgba(48,160,80,.3)",fontSize:13,marginBottom:14}}>{adminMsg}</div>}
                 {adminTab==="zones"&&(
@@ -1378,6 +1563,65 @@ export default function App() {
                       {!tarifForm.surDevis&&<div style={{marginBottom:12}}><label>Prix € HT *</label><input type="number" value={tarifForm.prix} onChange={e=>setTarifForm({...tarifForm,prix:e.target.value})} placeholder="250"/></div>}
                       <div style={{display:"flex",gap:8}}>{tarifEdit!==null&&<button className="btn btn-outline btn-sm" onClick={()=>{setTarifEdit(null);setTarifForm({zone:"",label:"",prix:"",surDevis:false});}}>Annuler</button>}<button className="btn btn-gold btn-sm" disabled={!tarifForm.label.trim()||!tarifForm.zone||(!tarifForm.surDevis&&!tarifForm.prix)} onClick={saveTarif}>{tarifEdit!==null?"Enregistrer":"Ajouter"}</button></div>
                     </div>
+                  </div>
+                )}
+                {adminTab==="users"&&(
+                  <div>
+                    <div style={{marginBottom:14}}>
+                      <div style={{fontSize:11,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:10,fontWeight:700}}>
+                        {editingUser?"Modifier l'utilisateur":"Nouvel utilisateur"}
+                      </div>
+                      <div style={{marginBottom:10}}>
+                        <label>Email *</label>
+                        <input type="email" value={userForm.email} onChange={e=>setUserForm({...userForm,email:e.target.value})} placeholder="prenom.nom@exemple.com" disabled={!!editingUser}/>
+                      </div>
+                      <div className="g2" style={{marginBottom:10}}>
+                        <div>
+                          <label>Prénom *</label>
+                          <input value={userForm.prenom} onChange={e=>setUserForm({...userForm,prenom:e.target.value})} placeholder="Jean"/>
+                        </div>
+                        <div>
+                          <label>Nom *</label>
+                          <input value={userForm.nom} onChange={e=>setUserForm({...userForm,nom:e.target.value})} placeholder="Dupont"/>
+                        </div>
+                      </div>
+                      <div style={{marginBottom:12}}>
+                        <label>Rôle *</label>
+                        <select value={userForm.role} onChange={e=>setUserForm({...userForm,role:e.target.value})}>
+                          <option value="expert">Expert</option>
+                          <option value="admin">Administrateur</option>
+                        </select>
+                      </div>
+                      <div style={{display:"flex",gap:8}}>
+                        {editingUser&&<button className="btn btn-outline btn-sm" onClick={()=>{setEditingUser(null);setUserForm({email:"",nom:"",prenom:"",role:"expert"});}}>Annuler</button>}
+                        <button 
+                          className="btn btn-gold btn-sm" 
+                          disabled={!userForm.email.trim()||!userForm.nom.trim()||!userForm.prenom.trim()} 
+                          onClick={()=>editingUser?updateUser(editingUser,{nom:userForm.nom,prenom:userForm.prenom,role:userForm.role}):createUser(userForm)}
+                        >
+                          {editingUser?"Enregistrer":"Créer"}
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{fontSize:11,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:10,marginTop:20}}>Liste des utilisateurs</div>
+                    {users.length===0&&<div style={{fontSize:13,color:"var(--muted)",padding:"12px",border:"1px dashed var(--border)"}}>Aucun utilisateur</div>}
+                    {users.map(u=>(
+                      <div key={u.uid} className="admin-row">
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                            <span style={{fontWeight:700,fontSize:13}}>{u.prenom} {u.nom}</span>
+                            <span style={{fontSize:12,color:"var(--muted)"}}>{u.email}</span>
+                            <span className={`badge ${u.role==="admin"?"badge-primary":"badge-ok"}`} style={{fontSize:10}}>
+                              {u.role==="admin"?"Admin":"Expert"}
+                            </span>
+                          </div>
+                        </div>
+                        <div style={{display:"flex",gap:8}}>
+                          <button className="btn btn-icon" onClick={()=>{setEditingUser(u.uid);setUserForm({email:u.email,nom:u.nom,prenom:u.prenom,role:u.role});}}>✏</button>
+                          <button className="btn btn-icon" style={{color:"var(--danger)"}} onClick={()=>deleteUser(u.uid)}>🗑</button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
