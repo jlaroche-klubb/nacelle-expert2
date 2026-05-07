@@ -32,7 +32,7 @@ async function uploadReportToStorage(htmlContent, immat, reportType = "depart") 
 }
 
 // Function to generate HTML report from current page
-function generateReportHTML() {
+function captureCurrentPageHTML() {
   // Clone the document and clean it up for standalone HTML
   const clone = document.documentElement.cloneNode(true);
   
@@ -60,7 +60,7 @@ async function openEmailClient(emailTo, immat, reportType = "depart") {
   if (isMobile) {
     try {
       // Generate and upload HTML report
-      const htmlContent = generateReportHTML();
+      const htmlContent = captureCurrentPageHTML();
       const reportUrl = await uploadReportToStorage(htmlContent, immat, reportType);
       
       // Add link to email body
