@@ -587,13 +587,42 @@ export default function App() {
           console.log("📄 Fetching user profile for UID:", user.uid);
           const userDoc = await getDoc(doc(db, "users", user.uid));
           console.log("📄 User doc exists?", userDoc.exists());
+          
           if(userDoc.exists()){
             const profile = userDoc.data();
             console.log("✅ User profile loaded:", profile);
             setUserProfile(profile);
           } else {
-            console.log("❌ No user profile found in Firestore for UID:", user.uid);
-            setUserProfile(null);
+            // Check if user is in pending_users (first login)
+            console.log("🔍 Checking pending_users for email:", user.email);
+            const pendingId = user.email.replace(/[@.]/g, '_');
+            const pendingDoc = await getDoc(doc(db, "pending_users", pendingId));
+            
+            if(pendingDoc.exists()){
+              // Migrate from pending_users to users
+              console.log("✨ Migrating user from pending to active");
+              const pendingData = pendingDoc.data();
+              const newProfile = {
+                email: pendingData.email,
+                nom: pendingData.nom,
+                prenom: pendingData.prenom,
+                role: pendingData.role,
+                activatedAt: new Date().toISOString(),
+                createdAt: pendingData.createdAt
+              };
+              
+              // Create in users collection with UID
+              await setDoc(doc(db, "users", user.uid), newProfile);
+              
+              // Delete from pending_users
+              await deleteDoc(doc(db, "pending_users", pendingId));
+              
+              console.log("✅ User activated successfully!");
+              setUserProfile(newProfile);
+            } else {
+              console.log("❌ No user profile found in Firestore for UID:", user.uid);
+              setUserProfile(null);
+            }
           }
         } catch(error) {
           console.error("❌ Error loading user profile:", error);
@@ -647,10 +676,18 @@ export default function App() {
 
   async function loadUsers() {
     try {
-      const snap = await getDocs(collection(db, "users"));
-      const result = [];
-      snap.docs.forEach(d => result.push({uid: d.id, ...d.data()}));
-      setUsers(result);
+      // Load active users (with UID)
+      const activeSnap = await getDocs(collection(db, "users"));
+      const activeUsers = [];
+      activeSnap.docs.forEach(d => activeUsers.push({uid: d.id, ...d.data(), status: "active"}));
+      
+      // Load pending users (waiting for first login)
+      const pendingSnap = await getDocs(collection(db, "pending_users"));
+      const pendingUsers = [];
+      pendingSnap.docs.forEach(d => pendingUsers.push({uid: d.id, ...d.data()}));
+      
+      // Combine both lists
+      setUsers([...activeUsers, ...pendingUsers]);
     } catch(error) {
       console.error("Error loading users:", error);
     }
@@ -658,15 +695,15 @@ export default function App() {
 
   async function createUser(userData) {
     try {
-      // Note: En production, il faudrait une Cloud Function pour créer le compte Firebase Auth
-      // Pour l'instant, on sauvegarde juste les infos et l'utilisateur devra se connecter avec Google
+      // Save to pending_users collection (will be moved to users on first login)
       const userId = userData.email.replace(/[@.]/g, '_');
-      await setDoc(doc(db, "users", userId), {
+      await setDoc(doc(db, "pending_users", userId), {
         ...userData,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        status: "pending" // Will become "active" on first login
       });
-      setAdminMsg("Utilisateur créé !");
-      setTimeout(() => setAdminMsg(""), 3000);
+      setAdminMsg("Utilisateur créé ! L'expert peut maintenant se connecter avec son compte Google.");
+      setTimeout(() => setAdminMsg(""), 4000);
       loadUsers();
       setUserForm({email:"",nom:"",prenom:"",role:"expert"});
     } catch(error) {
@@ -691,7 +728,13 @@ export default function App() {
   async function deleteUser(uid) {
     if(!confirm("Supprimer cet utilisateur ?")) return;
     try {
-      await deleteDoc(doc(db, "users", uid));
+      // Try to delete from users collection
+      try {
+        await deleteDoc(doc(db, "users", uid));
+      } catch(e) {
+        // If not found in users, try pending_users
+        await deleteDoc(doc(db, "pending_users", uid));
+      }
       setAdminMsg("Utilisateur supprimé !");
       setTimeout(() => setAdminMsg(""), 3000);
       loadUsers();
@@ -1628,10 +1671,12 @@ export default function App() {
                             <span className={`badge ${u.role==="admin"?"badge-primary":"badge-ok"}`} style={{fontSize:10}}>
                               {u.role==="admin"?"Admin":"Expert"}
                             </span>
+                            {u.status==="pending"&&<span className="badge badge-warn" style={{fontSize:10}}>En attente de connexion</span>}
+                            {u.status==="active"&&<span className="badge badge-ok" style={{fontSize:10}}>✓ Actif</span>}
                           </div>
                         </div>
                         <div style={{display:"flex",gap:8}}>
-                          <button className="btn btn-icon" onClick={()=>{setEditingUser(u.uid);setUserForm({email:u.email,nom:u.nom,prenom:u.prenom,role:u.role});}}>✏</button>
+                          <button className="btn btn-icon" onClick={()=>{setEditingUser(u.uid);setUserForm({email:u.email,nom:u.nom,prenom:u.prenom,role:u.role});}} disabled={u.status==="pending"}>✏</button>
                           <button className="btn btn-icon" style={{color:"var(--danger)"}} onClick={()=>deleteUser(u.uid)}>🗑</button>
                         </div>
                       </div>
