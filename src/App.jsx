@@ -64,7 +64,7 @@ async function openEmailClient(emailTo, immat, reportType = "depart") {
       const reportUrl = await uploadReportToStorage(htmlContent, immat, reportType);
       
       // Add link to email body
-      body += `Voir le rapport en ligne :\n${reportUrl}\n\n`;
+      body += `📄 Rapport complet :\n${reportUrl}\n\n`;
     } catch (error) {
       console.error('Upload failed:', error);
       body += `(Le lien du rapport n'a pas pu être généré)\n\n`;
@@ -243,6 +243,14 @@ label{font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--m
 .tab.active{color:var(--primary);border-bottom-color:var(--primary);}
 .accent-bar{height:4px;background:linear-gradient(90deg,var(--primary),var(--accent));}
 .header-bar{background:var(--primary);color:#fff;padding:0 24px;height:64px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.15);}
+@media(max-width:768px){
+  .header-bar{padding:0 12px;height:56px;}
+  .header-bar img{height:28px!important;}
+  .header-bar .header-title{font-size:11px!important;letter-spacing:1.5px!important;}
+  .header-bar .header-subtitle{font-size:7px!important;letter-spacing:1px!important;}
+  .header-bar .btn{font-size:10px;padding:6px 8px;}
+  .header-bar > div:first-child{gap:10px!important;}
+}
 @keyframes aiPulse{0%,80%,100%{opacity:.2}40%{opacity:1}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .fade-in{animation:fadeIn .3s ease;}
@@ -628,8 +636,8 @@ export default function App() {
         <div style={{display:"flex",alignItems:"center",gap:16,cursor:"pointer"}} onClick={goHome}>
           <img src={DELTA_LOGO} alt="Delta Services" style={{height:38,objectFit:"contain",filter:"brightness(0) invert(1)"}}/>
           <div>
-            <div style={{fontFamily:"'Share Tech Mono'",fontSize:15,letterSpacing:3,color:"#fff"}}>EXPERTISE NACELLE</div>
-            <div style={{fontSize:10,letterSpacing:2,color:"rgba(255,255,255,.6)",textTransform:"uppercase"}}>Système d'expertise PEMP · Delta Services</div>
+            <div className="header-title" style={{fontFamily:"'Share Tech Mono'",fontSize:15,letterSpacing:3,color:"#fff"}}>EXPERTISE NACELLE</div>
+            <div className="header-subtitle" style={{fontSize:10,letterSpacing:2,color:"rgba(255,255,255,.6)",textTransform:"uppercase"}}>Système d'expertise PEMP · Delta Services</div>
           </div>
         </div>
         <div style={{display:"flex",gap:8}}>
