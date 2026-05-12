@@ -550,7 +550,7 @@ export default function App() {
   const [commercialPhotos,setCommercialPhotos]=useState({}); // { "av_droit": base64, "ar_gauche": base64 }
   const [processingPhoto,setProcessingPhoto]=useState(null); // clé en cours de traitement
 
-  const [retForm,setRetForm]=useState({date:todayISO(),heures:"",km_porteur:"",agent:""});
+  const [retForm,setRetForm]=useState({date:todayISO(),heures:"",km_porteur:"",agent:"",immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:""});
   const [retZones,setRetZones]=useState({});
   const [retPhotos,setRetPhotos]=useState({});
   const [retDegats,setRetDegats]=useState([]);
@@ -1186,14 +1186,12 @@ export default function App() {
                     </div>
                     <div style={{padding:"16px",border:"2px dashed var(--border2)",background:"#f8f9fb"}}>
                       <div style={{fontSize:13,fontWeight:600,color:"var(--primary)",marginBottom:6}}>Retour sans dossier départ</div>
-                      <div style={{fontSize:12,color:"var(--muted)",marginBottom:12}}>Aucun état de départ disponible. L'immatriculation sera utilisée comme référence.</div>
+                      <div style={{fontSize:12,color:"var(--muted)",marginBottom:12}}>Aucun état de départ disponible. Vous devrez remplir les informations du véhicule.</div>
                       {!searchImmat.trim() && <div style={{color:"var(--accent)",fontSize:12,marginBottom:8}}>⚠ Saisissez d'abord l'immatriculation ci-dessus.</div>}
-                      <button className="btn btn-accent" disabled={!searchImmat.trim()} onClick={async()=>{
-                        const d={id:genId(),immat:searchImmat,info:{immat:searchImmat,type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""},depart:{zones:{},photos:{},date:todayISO(),heures:"",km_porteur:"",agent:"",sansDossier:true},retour:null,createdAt:new Date().toISOString()};
-                        await fbSaveDossier(d);
-                        setDossiers(prev=>({...prev,[d.immat]:d}));
-                        setFoundDossier(d);
-                        setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);
+                      <button className="btn btn-accent" disabled={!searchImmat.trim()} onClick={()=>{
+                        // Préparer le formulaire pour remplir les infos manquantes
+                        setRetForm({...retForm, immat:searchImmat, date:todayISO(), agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});
+                        setRetStep(0.5); // Étape intermédiaire pour remplir les infos
                       }}>+ Créer retour sans départ</button>
                     </div>
                   </div>
@@ -1227,6 +1225,89 @@ export default function App() {
                   </div>
                 )}
                 {!foundDossier&&<div style={{marginTop:8}}><button className="btn btn-outline" onClick={goHome}>← Accueil</button></div>}
+              </div>
+            )}
+
+            {retStep===0.5&&(
+              <div>
+                <div className="section-title">Informations du véhicule</div>
+                <div className="card" style={{marginBottom:14}}>
+                  <div style={{fontSize:12,color:"var(--muted)",marginBottom:14}}>
+                    Aucun dossier départ n'existe. Veuillez renseigner les informations du véhicule.
+                  </div>
+                  
+                  <div className="g2" style={{marginBottom:12}}>
+                    <div><label>Type nacelle *</label><input value={retForm.type_nacelle||""} onChange={e=>setRetForm({...retForm,type_nacelle:e.target.value})} placeholder="Nacelle ciseau"/></div>
+                    <div><label>Modèle porteur *</label><input value={retForm.modele||""} onChange={e=>setRetForm({...retForm,modele:e.target.value})} placeholder="Iveco Daily"/></div>
+                  </div>
+                  
+                  <div className="g2" style={{marginBottom:12}}>
+                    <div><label>Année de mise en circulation</label><input type="number" value={retForm.annee_fab||""} onChange={e=>setRetForm({...retForm,annee_fab:e.target.value})} placeholder="2015"/></div>
+                    <div><label>Client *</label><input value={retForm.client||""} onChange={e=>setRetForm({...retForm,client:e.target.value})} placeholder="Nom du client"/></div>
+                  </div>
+                  
+                  <div className="g2" style={{marginBottom:12}}>
+                    <div><label>Numéro de contrat</label><input value={retForm.contrat||""} onChange={e=>setRetForm({...retForm,contrat:e.target.value})} placeholder="CTR-2024-001"/></div>
+                    <div><label>Email client</label><input type="email" value={retForm.email||""} onChange={e=>setRetForm({...retForm,email:e.target.value})} placeholder="client@exemple.fr"/></div>
+                  </div>
+                  
+                  <div style={{fontSize:11,color:"var(--muted)",marginTop:8}}>* Champs recommandés</div>
+                </div>
+                
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <button className="btn btn-outline" onClick={()=>{setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>← Annuler</button>
+                  <button 
+                    className="btn btn-gold" 
+                    disabled={!retForm.type_nacelle || !retForm.modele || !retForm.client}
+                    onClick={async()=>{
+                      // Créer le dossier avec les infos remplies
+                      const d={
+                        id:genId(),
+                        immat:searchImmat,
+                        info:{
+                          immat:searchImmat,
+                          type_nacelle:retForm.type_nacelle,
+                          modele:retForm.modele,
+                          annee_fab:retForm.annee_fab||"",
+                          client:retForm.client,
+                          contrat:retForm.contrat||"",
+                          email:retForm.email||"",
+                          date:todayISO(),
+                          heures:"",
+                          km_porteur:"",
+                          agent:retForm.agent
+                        },
+                        depart:{
+                          zones:{},
+                          photos:{},
+                          date:todayISO(),
+                          heures:"",
+                          km_porteur:"",
+                          agent:"",
+                          sansDossier:true
+                        },
+                        retour:null,
+                        createdAt:new Date().toISOString(),
+                        createdBy: currentUser?.uid || null,
+                        createdByName: userProfile ? `${userProfile.prenom} ${userProfile.nom}` : retForm.agent
+                      };
+                      await fbSaveDossier(d);
+                      setDossiers(prev=>({...prev,[d.immat]:d}));
+                      setFoundDossier(d);
+                      setRetZones({});
+                      setRetPhotos({});
+                      setRetDegats([]);
+                      setRetNote("");
+                      setRetCommercialPhotos({});
+                      setRetProcessingPhoto(null);
+                      setEmailClient(d.info.email);
+                      setEmailSent(false);
+                      setRetStep(1);
+                    }}
+                  >
+                    Continuer l'expertise →
+                  </button>
+                </div>
               </div>
             )}
 
