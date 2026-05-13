@@ -745,28 +745,34 @@ export default function App() {
   }
 
   // Upload photo détourée to Firebase Storage
-  async function uploadDetoureedPhotoToStorage(base64Data, immat, zoneId, photoIndex, type = "depart") {
+  async function uploadDetoureedPhotoToStorage(base64Data, immat, zoneId, photoIndex, type = "retour") {
     try {
-      // Convert base64 to blob
-      const response = await fetch(base64Data);
-      const blob = await response.blob();
+      console.log("🔄 Uploading photo to Storage...", {immat, zoneId, photoIndex, type});
       
       // Create storage path
       const timestamp = Date.now();
       const filename = `photo_${photoIndex}_${timestamp}.png`;
       const storagePath = `photos-detourees/${immat}/${type}/${zoneId}/${filename}`;
       
-      // Upload to Firebase Storage
+      console.log("📂 Storage path:", storagePath);
+      
+      // Upload to Firebase Storage using uploadString with data_url format
       const storageRef = ref(storage, storagePath);
-      await uploadString(storageRef, base64Data, 'data_url');
+      const snapshot = await uploadString(storageRef, base64Data, 'data_url');
+      
+      console.log("📤 Upload complete:", snapshot.metadata.fullPath);
       
       // Get download URL
       const downloadURL = await getDownloadURL(storageRef);
       
-      console.log(`✅ Photo uploaded to Storage: ${storagePath}`);
+      console.log(`✅ Photo uploaded successfully!`);
+      console.log(`📍 Download URL:`, downloadURL);
+      
       return downloadURL;
     } catch(error) {
       console.error("❌ Error uploading photo to Storage:", error);
+      console.error("Error details:", error.message);
+      alert(`Erreur upload Storage: ${error.message}`);
       return null;
     }
   }
