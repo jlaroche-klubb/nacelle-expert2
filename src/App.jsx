@@ -744,6 +744,33 @@ export default function App() {
     }
   }
 
+  // Upload photo détourée to Firebase Storage
+  async function uploadDetoureedPhotoToStorage(base64Data, immat, zoneId, photoIndex, type = "depart") {
+    try {
+      // Convert base64 to blob
+      const response = await fetch(base64Data);
+      const blob = await response.blob();
+      
+      // Create storage path
+      const timestamp = Date.now();
+      const filename = `photo_${photoIndex}_${timestamp}.png`;
+      const storagePath = `photos-detourees/${immat}/${type}/${zoneId}/${filename}`;
+      
+      // Upload to Firebase Storage
+      const storageRef = ref(storage, storagePath);
+      await uploadString(storageRef, base64Data, 'data_url');
+      
+      // Get download URL
+      const downloadURL = await getDownloadURL(storageRef);
+      
+      console.log(`✅ Photo uploaded to Storage: ${storagePath}`);
+      return downloadURL;
+    } catch(error) {
+      console.error("❌ Error uploading photo to Storage:", error);
+      return null;
+    }
+  }
+
   async function addPhotos(files,zoneId,setter) { const arr=[]; for(const f of Array.from(files)) arr.push({name:f.name,url:await photoToBase64(f)}); setter(prev=>({...prev,[zoneId]:[...(prev[zoneId]||[]),...arr]})); }
   function removePhoto(zoneId,idx,setter) { setter(prev=>({...prev,[zoneId]:prev[zoneId].filter((_,i)=>i!==idx)})); }
   function setZE(setter,zoneId,etat) { setter(prev=>({...prev,[zoneId]:{...(prev[zoneId]||{}),etat}})); }
@@ -766,7 +793,17 @@ export default function App() {
     if(!foundDossier) return;
     const updated={
       ...foundDossier,
-      retour:{zones:retZones,photos:retPhotos,degats:retDegats,note:retNote,date:retForm.date,heures:retForm.heures,km_porteur:retForm.km_porteur,agent:retForm.agent},
+      retour:{
+        zones:retZones,
+        photos:retPhotos,
+        degats:retDegats,
+        note:retNote,
+        date:retForm.date,
+        heures:retForm.heures,
+        km_porteur:retForm.km_porteur,
+        agent:retForm.agent,
+        commercialPhotos:retCommercialPhotos // Save commercial photos (detoured) URLs
+      },
       updatedAt:new Date().toISOString(),
       updatedBy: currentUser?.uid || null,
       updatedByName: userProfile ? `${userProfile.prenom} ${userProfile.nom}` : retForm.agent
@@ -1353,10 +1390,22 @@ export default function App() {
                                             <div style={{position:"relative",display:"inline-block"}}><img src={retPhoto.url} alt="" style={{width:"100%",maxWidth:160,height:110,objectFit:"cover",border:"1px solid var(--border2)"}}/><button className="btn btn-danger" onClick={()=>removePhoto(key,0,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:9}}>✕</button></div>
                                             {COMMERCIAL_ANGLES.includes(angle.key)&&retCommercialPhotos[angle.key]&&(
                                               <div style={{marginTop:8,padding:"10px",background:"#f0f4ff",border:"1px solid rgba(26,42,110,.2)"}}>
-                                                <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:6,fontWeight:700}}>✓ Photo commerciale</div>
+                                                <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:6,fontWeight:700}}>
+                                                  ✓ Photo commerciale {typeof retCommercialPhotos[angle.key]==="object"&&retCommercialPhotos[angle.key].type==="storage"?"(Storage)":""}
+                                                </div>
                                                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                                                  <img src={retCommercialPhotos[angle.key]} alt="commercial" style={{width:140,height:80,objectFit:"cover",border:"1px solid var(--border2)"}}/>
-                                                  <a href={retCommercialPhotos[angle.key]} download={`${foundDossier?.immat||"nacelle"}_${angle.label.replace(/ /g,"_")}_commercial.jpg`} style={{padding:"8px 12px",background:"var(--primary)",color:"#fff",fontSize:11,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",textDecoration:"none",display:"inline-block"}}>⬇ Télécharger</a>
+                                                  <img 
+                                                    src={typeof retCommercialPhotos[angle.key]==="object" ? retCommercialPhotos[angle.key].url : retCommercialPhotos[angle.key]} 
+                                                    alt="commercial" 
+                                                    style={{width:140,height:80,objectFit:"cover",border:"1px solid var(--border2)"}}
+                                                  />
+                                                  <a 
+                                                    href={typeof retCommercialPhotos[angle.key]==="object" ? retCommercialPhotos[angle.key].url : retCommercialPhotos[angle.key]} 
+                                                    download={`${foundDossier?.immat||"nacelle"}_${angle.label.replace(/ /g,"_")}_commercial.jpg`} 
+                                                    style={{padding:"8px 12px",background:"var(--primary)",color:"#fff",fontSize:11,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",textDecoration:"none",display:"inline-block"}}
+                                                  >
+                                                    ⬇ Télécharger
+                                                  </a>
                                                 </div>
                                               </div>
                                             )}
@@ -1377,7 +1426,23 @@ export default function App() {
                                             const removed=await removeBackground(b64);
                                             if(removed) {
                                               const composed=await composeCommercialPhoto(removed,foundDossier?.immat,DELTA_LOGO);
-                                              if(composed) setRetCommercialPhotos(prev=>({...prev,[angle.key]:composed}));
+                                              if(composed) {
+                                                // Upload to Firebase Storage
+                                                const storageURL = await uploadDetoureedPhotoToStorage(
+                                                  composed,
+                                                  foundDossier?.immat,
+                                                  key,
+                                                  angle.key,
+                                                  "retour"
+                                                );
+                                                if(storageURL) {
+                                                  setRetCommercialPhotos(prev=>({...prev,[angle.key]:{url:storageURL, type:"storage"}}));
+                                                  console.log("✅ Photo détourée uploadée:", storageURL);
+                                                } else {
+                                                  // Fallback: store base64 if upload fails
+                                                  setRetCommercialPhotos(prev=>({...prev,[angle.key]:{url:composed, type:"base64"}}));
+                                                }
+                                              }
                                             }
                                             setRetProcessingPhoto(null);
                                           }
