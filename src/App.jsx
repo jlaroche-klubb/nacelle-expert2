@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { db, auth, googleProvider, storage } from "./firebase";
+import { db, auth, googleProvider } from "./firebase";
 import { collection, doc, setDoc, getDocs, deleteDoc, getDoc, updateDoc } from "firebase/firestore";
 import { getStorage, ref, uploadString, getDownloadURL } from "firebase/storage";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
@@ -810,6 +810,7 @@ export default function App() {
         agent:retForm.agent,
         commercialPhotos:retCommercialPhotos // Save commercial photos (detoured) URLs
       },
+      synced_to_delta_vo: false, // Marqueur pour synchronisation avec Delta VO
       updatedAt:new Date().toISOString(),
       updatedBy: currentUser?.uid || null,
       updatedByName: userProfile ? `${userProfile.prenom} ${userProfile.nom}` : retForm.agent
