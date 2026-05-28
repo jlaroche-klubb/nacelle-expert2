@@ -971,6 +971,7 @@ export default function App() {
     if(!foundDossier) return;
     const updated={
       ...foundDossier,
+      info:{...foundDossier.info, numero_cube: retForm.numero_cube || foundDossier.info?.numero_cube || ""},
       retour:{
         zones:retZones,
         photos:retPhotos,
@@ -1246,11 +1247,10 @@ export default function App() {
                 <div className="card" style={{marginBottom:14}}>
                   <div className="g3" style={{marginBottom:12}}>
                     <div><label>Immatriculation *</label><input value={depForm.immat} onChange={e=>setDepForm({...depForm,immat:e.target.value.toUpperCase()})} placeholder="AB-123-CD"/></div>
-                    <div><label>N° de cube *</label><input value={depForm.numero_cube} onChange={e=>setDepForm({...depForm,numero_cube:e.target.value.toUpperCase()})} placeholder="Ex : C12345"/></div>
                     <div><label>Type nacelle</label><input value={depForm.type_nacelle} onChange={e=>setDepForm({...depForm,type_nacelle:e.target.value})} placeholder="KL32/PT160/KL21/TARRIERE"/></div>
+                    <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
                   </div>
                   <div className="g3" style={{marginBottom:12}}>
-                    <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
                     <div><label>Date mise en circulation</label><input type="text" value={depForm.annee_fab} onChange={e=>setDepForm({...depForm,annee_fab:e.target.value})} placeholder="JJ/MM/AAAA"/></div>
                     <div><label>N° Contrat</label><input value={depForm.contrat} onChange={e=>setDepForm({...depForm,contrat:e.target.value})} placeholder="CTR-2024-055"/></div>
                   </div>
@@ -1270,8 +1270,8 @@ export default function App() {
                 <div style={{display:"flex",justifyContent:"space-between"}}>
                   <button className="btn btn-outline" onClick={goHome}>← Annuler</button>
                   <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
-                    {(!depForm.immat||!depForm.numero_cube)&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Immatriculation et N° de cube obligatoires</div>}
-                    <button className="btn btn-gold" disabled={!depForm.immat||!depForm.numero_cube} onClick={()=>setDepStep(1)}>Suivant →</button>
+                    {!depForm.immat&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ L'immatriculation est obligatoire</div>}
+                    <button className="btn btn-gold" disabled={!depForm.immat} onClick={()=>setDepStep(1)}>Suivant →</button>
                   </div>
                 </div>
               </div>
@@ -1370,7 +1370,7 @@ export default function App() {
                 </div>
                 <div className="card" style={{marginBottom:10}}>
                   <div className="g3">
-                    {[["Immatriculation",depForm.immat],["N° de cube",depForm.numero_cube],["Type nacelle",depForm.type_nacelle],["Modèle porteur",depForm.modele],["Mise en circulation",depForm.annee_fab],["Client",depForm.client],["Contrat",depForm.contrat],["Email",depForm.email],["Date",depForm.date],["Heures nacelle",depForm.heures?depForm.heures+" h":"—"],["Km porteur",depForm.km_porteur?depForm.km_porteur+" km":"—"],["Agent",depForm.agent]].map(([k,v])=>(
+                    {[["Immatriculation",depForm.immat],["Type nacelle",depForm.type_nacelle],["Modèle porteur",depForm.modele],["Mise en circulation",depForm.annee_fab],["Client",depForm.client],["Contrat",depForm.contrat],["Email",depForm.email],["Date",depForm.date],["Heures nacelle",depForm.heures?depForm.heures+" h":"—"],["Km porteur",depForm.km_porteur?depForm.km_porteur+" km":"—"],["Agent",depForm.agent]].map(([k,v])=>(
                       <div key={k} style={{marginBottom:6}}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
                     ))}
                   </div>
@@ -1455,17 +1455,24 @@ export default function App() {
                     </div>
                     <div className="card" style={{marginBottom:14}}>
                       <div className="g2" style={{marginBottom:12}}>
+                        <div><label>N° de cube *</label><input value={retForm.numero_cube||""} onChange={e=>setRetForm({...retForm,numero_cube:e.target.value.toUpperCase()})} placeholder="Ex : C12345"/></div>
                         <div><label>Date retour</label><input type="date" value={retForm.date} onChange={e=>setRetForm({...retForm,date:e.target.value})}/></div>
+                      </div>
+                      <div className="g2" style={{marginBottom:12}}>
                         <div><label>Agent expert</label><input value={retForm.agent} onChange={e=>setRetForm({...retForm,agent:e.target.value})} placeholder="Prénom Nom"/></div>
+                        <div/>
                       </div>
                       <div className="g2">
                         <div><label>Heures nacelle retour</label><input type="number" value={retForm.heures} onChange={e=>setRetForm({...retForm,heures:e.target.value})} placeholder="1 380"/></div>
                         <div><label>Km porteur retour</label><input type="number" value={retForm.km_porteur} onChange={e=>setRetForm({...retForm,km_porteur:e.target.value})} placeholder="47 000"/></div>
                       </div>
                     </div>
-                    <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <button className="btn btn-outline" onClick={()=>{setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>← Annuler</button>
-                      <button className="btn btn-gold" onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
+                      <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
+                        {!retForm.numero_cube&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Le N° de cube est obligatoire</div>}
+                        <button className="btn btn-gold" disabled={!retForm.numero_cube} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1482,7 +1489,7 @@ export default function App() {
                   </div>
                   
                   <div className="g2" style={{marginBottom:12}}>
-                    <div><label>N° de cube</label><input value={retForm.numero_cube||""} onChange={e=>setRetForm({...retForm,numero_cube:e.target.value.toUpperCase()})} placeholder="Ex : C12345"/></div>
+                    <div><label>N° de cube *</label><input value={retForm.numero_cube||""} onChange={e=>setRetForm({...retForm,numero_cube:e.target.value.toUpperCase()})} placeholder="Ex : C12345"/></div>
                     <div><label>Type nacelle *</label><input value={retForm.type_nacelle||""} onChange={e=>setRetForm({...retForm,type_nacelle:e.target.value})} placeholder="KL32/PT160/KL21/TARRIERE"/></div>
                   </div>
                   
@@ -1513,7 +1520,7 @@ export default function App() {
                   <button className="btn btn-outline" onClick={()=>{setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>← Annuler</button>
                   <button 
                     className="btn btn-gold" 
-                    disabled={!retForm.type_nacelle || !retForm.modele || !retForm.client}
+                    disabled={!retForm.numero_cube || !retForm.type_nacelle || !retForm.modele || !retForm.client}
                     onClick={async()=>{
                       // Créer le dossier avec les infos remplies
                       const d={
@@ -1757,7 +1764,7 @@ export default function App() {
                 <div className="card" style={{marginBottom:14,border:"2px solid var(--primary)"}}>
                   <div style={{fontSize:11,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",fontWeight:700,marginBottom:12}}>Récapitulatif</div>
                   <div className="g3" style={{marginBottom:14}}>
-                    {[["Immatriculation",foundDossier.immat],["N° de cube",foundDossier.info?.numero_cube],["Client",foundDossier.info?.client],["Contrat",foundDossier.info?.contrat],["Date retour",retForm.date],["Heures départ",foundDossier.depart?.heures?foundDossier.depart.heures+" h":"—"],["Heures retour",retForm.heures?retForm.heures+" h":"—"],["Heures utilisées",foundDossier.depart?.heures&&retForm.heures?(parseInt(retForm.heures)-parseInt(foundDossier.depart.heures))+" h":"—"],["Km porteur départ",foundDossier.depart?.km_porteur?foundDossier.depart.km_porteur+" km":"—"],["Km porteur retour",retForm.km_porteur?retForm.km_porteur+" km":"—"],["Km parcourus",foundDossier.depart?.km_porteur&&retForm.km_porteur?(parseInt(retForm.km_porteur)-parseInt(foundDossier.depart.km_porteur))+" km":"—"]].map(([k,v])=>(
+                    {[["Immatriculation",foundDossier.immat],["N° de cube",retForm.numero_cube||foundDossier.info?.numero_cube],["Client",foundDossier.info?.client],["Contrat",foundDossier.info?.contrat],["Date retour",retForm.date],["Heures départ",foundDossier.depart?.heures?foundDossier.depart.heures+" h":"—"],["Heures retour",retForm.heures?retForm.heures+" h":"—"],["Heures utilisées",foundDossier.depart?.heures&&retForm.heures?(parseInt(retForm.heures)-parseInt(foundDossier.depart.heures))+" h":"—"],["Km porteur départ",foundDossier.depart?.km_porteur?foundDossier.depart.km_porteur+" km":"—"],["Km porteur retour",retForm.km_porteur?retForm.km_porteur+" km":"—"],["Km parcourus",foundDossier.depart?.km_porteur&&retForm.km_porteur?(parseInt(retForm.km_porteur)-parseInt(foundDossier.depart.km_porteur))+" km":"—"]].map(([k,v])=>(
                       <div key={k}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
                     ))}
                   </div>
