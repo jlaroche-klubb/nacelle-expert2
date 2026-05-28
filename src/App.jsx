@@ -271,7 +271,7 @@ function photoToBase64(file) {
   return new Promise((res,rej) => { const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
 }
 function pickFile(opts={}) {
-  return new Promise(res => { const inp=document.createElement("input"); inp.type="file"; inp.accept=opts.accept||"image/*"; inp.multiple=opts.multiple||false; inp.onchange=()=>res(inp.files); inp.click(); });
+  return new Promise(res => { const inp=document.createElement("input"); inp.type="file"; inp.accept=opts.accept||"image/*"; inp.multiple=opts.multiple||false; if(!opts.multiple) inp.setAttribute("capture","environment"); inp.onchange=()=>res(inp.files); inp.click(); });
 }
 async function compressBase64(base64,maxW=800,quality=0.7) {
   return new Promise(res => { const img=new Image(); img.onload=()=>{ const c=document.createElement("canvas"); const r=Math.min(maxW/img.width,maxW/img.height,1); c.width=img.width*r; c.height=img.height*r; c.getContext("2d").drawImage(img,0,0,c.width,c.height); res(c.toDataURL("image/jpeg",quality)); }; img.src=base64; });
