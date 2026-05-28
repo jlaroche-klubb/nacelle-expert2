@@ -546,6 +546,89 @@ export default function App() {
   const [depStep,setDepStep]=useState(0);
   const [openZone,setOpenZone]=useState(null);
   const [depEmailSending,setDepEmailSending]=useState(false);
+  const [draftAvailable,setDraftAvailable]=useState(null); // {type:"depart"|"retour", data:{...}}
+
+  // ═══════════════════════════════════════════════════════════
+  // SYSTÈME DE BROUILLON — Sauvegarde automatique en continu
+  // ═══════════════════════════════════════════════════════════
+  function saveDraft(type, data) {
+    try {
+      localStorage.setItem(`nacelle_draft_${type}`, JSON.stringify({...data, savedAt: new Date().toISOString()}));
+      console.log(`💾 Brouillon ${type} sauvegardé`);
+    } catch(e) {
+      // Si trop gros (photos), sauvegarder sans les photos
+      try {
+        const light = {...data};
+        if(light.depPhotos) light.depPhotos = {};
+        if(light.retPhotos) light.retPhotos = {};
+        if(light.commercialPhotos) light.commercialPhotos = {};
+        if(light.retCommercialPhotos) light.retCommercialPhotos = {};
+        localStorage.setItem(`nacelle_draft_${type}`, JSON.stringify({...light, savedAt: new Date().toISOString(), photosLost: true}));
+        console.log(`💾 Brouillon ${type} sauvegardé (sans photos)`);
+      } catch(e2) { console.error("Impossible de sauvegarder le brouillon:", e2); }
+    }
+  }
+  function loadDraft(type) {
+    try {
+      const raw = localStorage.getItem(`nacelle_draft_${type}`);
+      if(raw) return JSON.parse(raw);
+    } catch(e) { console.error("Erreur lecture brouillon:", e); }
+    return null;
+  }
+  function clearDraft(type) {
+    try {
+      localStorage.removeItem(`nacelle_draft_${type}`);
+      console.log(`🗑 Brouillon ${type} supprimé`);
+    } catch(e) {}
+    setDraftAvailable(null);
+  }
+  function clearAllDrafts() { clearDraft("depart"); clearDraft("retour"); setDraftAvailable(null); }
+
+  // Auto-save DÉPART
+  useEffect(()=>{
+    if(view==="depart" && depStep > 0) {
+      saveDraft("depart", { depForm, depZones, depPhotos, depStep, commercialPhotos });
+    }
+  },[view, depForm, depZones, depPhotos, depStep, commercialPhotos]);
+
+  // Auto-save RETOUR
+  useEffect(()=>{
+    if(view==="retour" && retStep >= 1) {
+      saveDraft("retour", { retForm, retZones, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, searchImmat, emailClient });
+    }
+  },[view, retForm, retZones, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, emailClient]);
+
+  // Détection brouillon au démarrage
+  useEffect(()=>{
+    const depDraft = loadDraft("depart");
+    const retDraft = loadDraft("retour");
+    if(retDraft) setDraftAvailable({type:"retour", data:retDraft});
+    else if(depDraft) setDraftAvailable({type:"depart", data:depDraft});
+  },[]);
+
+  function resumeDraft(draft) {
+    if(draft.type==="depart") {
+      setDepForm(draft.data.depForm || {immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});
+      setDepZones(draft.data.depZones || {});
+      setDepPhotos(draft.data.depPhotos || {});
+      setDepStep(draft.data.depStep || 1);
+      setCommercialPhotos(draft.data.commercialPhotos || {});
+      setView("depart");
+    } else if(draft.type==="retour") {
+      setRetForm(draft.data.retForm || {date:todayISO(),heures:"",km_porteur:"",agent:"",immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:""});
+      setRetZones(draft.data.retZones || {});
+      setRetPhotos(draft.data.retPhotos || {});
+      setRetDegats(draft.data.retDegats || []);
+      setRetNote(draft.data.retNote || "");
+      setRetStep(draft.data.retStep || 1);
+      setRetCommercialPhotos(draft.data.retCommercialPhotos || {});
+      setFoundDossier(draft.data.foundDossier || null);
+      setSearchImmat(draft.data.searchImmat || "");
+      setEmailClient(draft.data.emailClient || "");
+      setView("retour");
+    }
+    setDraftAvailable(null);
+  }
   const [depEmailSent,setDepEmailSent]=useState(false);
   const [commercialPhotos,setCommercialPhotos]=useState({}); // { "av_droit": base64, "ar_gauche": base64 }
   const [processingPhoto,setProcessingPhoto]=useState(null); // clé en cours de traitement
@@ -940,6 +1023,29 @@ export default function App() {
         {/* HOME */}
         {view==="home"&&(
           <div className="fade-in">
+            {/* BANDEAU REPRISE BROUILLON */}
+            {draftAvailable&&(
+              <div style={{marginBottom:16,padding:"14px 18px",background:"linear-gradient(135deg,rgba(26,42,110,.06),rgba(200,16,46,.04))",border:"2px solid var(--primary)",animation:"fadeIn .4s ease"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700,color:"var(--primary)",marginBottom:4}}>
+                      📋 Expertise {draftAvailable.type==="depart"?"DÉPART":"RETOUR"} en cours
+                    </div>
+                    <div style={{fontSize:12,color:"var(--muted)"}}>
+                      {draftAvailable.data.depForm?.immat || draftAvailable.data.foundDossier?.immat || draftAvailable.data.searchImmat || "—"}
+                      {draftAvailable.data.depForm?.client ? ` · ${draftAvailable.data.depForm.client}` : ""}
+                      {draftAvailable.data.foundDossier?.info?.client ? ` · ${draftAvailable.data.foundDossier.info.client}` : ""}
+                      {" · "}Sauvegardé {draftAvailable.data.savedAt ? new Date(draftAvailable.data.savedAt).toLocaleString("fr-FR",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"2-digit"}) : ""}
+                      {draftAvailable.data.photosLost ? " ⚠ (photos à reprendre)" : ""}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button className="btn btn-outline btn-sm" onClick={()=>{clearDraft(draftAvailable.type);setDraftAvailable(null);}}>Abandonner</button>
+                    <button className="btn btn-accent btn-sm" onClick={()=>resumeDraft(draftAvailable)}>▶ Reprendre</button>
+                  </div>
+                </div>
+              </div>
+            )}
             <div style={{display:"flex",gap:10,marginBottom:18}}>
               {[["Dossiers",Object.keys(dossiers).length,"var(--primary)"],["Retours traités",Object.values(dossiers).filter(d=>d.retour).length,"var(--ok)"],["En location",Object.values(dossiers).filter(d=>!d.retour).length,"var(--accent)"]].map(([l,n,c])=>(
                 <div key={l} className="card" style={{flex:1,textAlign:"center"}}>
@@ -1165,7 +1271,7 @@ export default function App() {
                     {depForm.email && (
                       <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(depForm.email, depForm.immat, "depart")}>📧 Email</button>
                     )}
-                    <button className="btn btn-gold" onClick={async()=>{await saveDepart();goHome();}} disabled={!depForm.immat}>✓ Valider & sauvegarder</button>
+                    <button className="btn btn-gold" onClick={async()=>{await saveDepart();clearDraft("depart");goHome();}} disabled={!depForm.immat}>✓ Valider & sauvegarder</button>
                   </div>
                 </div>
                 <div className="card" style={{marginBottom:10}}>
@@ -1570,6 +1676,7 @@ export default function App() {
                   )}
                   <button className="btn btn-gold" onClick={async()=>{
                     const d=await saveRetour();
+                    clearDraft("retour");
                     setActiveDossier(d);
                     setView("rapport");
                   }}>✓ Confirmer</button>
