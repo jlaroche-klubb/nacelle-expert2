@@ -584,28 +584,6 @@ export default function App() {
   }
   function clearAllDrafts() { clearDraft("depart"); clearDraft("retour"); setDraftAvailable(null); }
 
-  // Auto-save DÉPART
-  useEffect(()=>{
-    if(view==="depart" && depStep > 0) {
-      saveDraft("depart", { depForm, depZones, depPhotos, depStep, commercialPhotos });
-    }
-  },[view, depForm, depZones, depPhotos, depStep, commercialPhotos]);
-
-  // Auto-save RETOUR
-  useEffect(()=>{
-    if(view==="retour" && retStep >= 1) {
-      saveDraft("retour", { retForm, retZones, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, searchImmat, emailClient });
-    }
-  },[view, retForm, retZones, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, emailClient]);
-
-  // Détection brouillon au démarrage
-  useEffect(()=>{
-    const depDraft = loadDraft("depart");
-    const retDraft = loadDraft("retour");
-    if(retDraft) setDraftAvailable({type:"retour", data:retDraft});
-    else if(depDraft) setDraftAvailable({type:"depart", data:depDraft});
-  },[]);
-
   function resumeDraft(draft) {
     if(draft.type==="depart") {
       setDepForm(draft.data.depForm || {immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});
@@ -658,6 +636,28 @@ export default function App() {
   const [searchDone,setSearchDone]=useState(false);
 
   useEffect(()=>{ loadAll(); },[]);
+
+  // Auto-save DÉPART (brouillon)
+  useEffect(()=>{
+    if(view==="depart" && depStep > 0) {
+      saveDraft("depart", { depForm, depZones, depPhotos, depStep, commercialPhotos });
+    }
+  },[view, depForm, depZones, depPhotos, depStep, commercialPhotos]);
+
+  // Auto-save RETOUR (brouillon)
+  useEffect(()=>{
+    if(view==="retour" && retStep >= 1) {
+      saveDraft("retour", { retForm, retZones, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, searchImmat, emailClient });
+    }
+  },[view, retForm, retZones, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, emailClient]);
+
+  // Détection brouillon au démarrage
+  useEffect(()=>{
+    const depDraft = loadDraft("depart");
+    const retDraft = loadDraft("retour");
+    if(retDraft) setDraftAvailable({type:"retour", data:retDraft});
+    else if(depDraft) setDraftAvailable({type:"depart", data:depDraft});
+  },[]);
   
   // Auth listener
   useEffect(()=>{
