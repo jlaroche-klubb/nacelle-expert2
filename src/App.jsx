@@ -122,7 +122,10 @@ const DEFAULT_TARIFS = [
   { id: "phare_avant", zone: "optiques", label: "Phare avant — cassé ou rayure profonde", prix: 450 },
   { id: "feu_position", zone: "optiques", label: "Feux de position latéral", prix: 36 },
   { id: "feu_stop_panier", zone: "optiques", label: "3e feux stop sur panier 12V — cassé", prix: 70 },
-  { id: "feu_arriere", zone: "optiques", label: "Feu arrière — cassé ou rayure profonde", prix: 180 },
+  { id: "feu_av_gauche", zone: "optiques", label: "Feu avant gauche — cassé ou rayure profonde", prix: 180 },
+  { id: "feu_av_droit", zone: "optiques", label: "Feu avant droit — cassé ou rayure profonde", prix: 180 },
+  { id: "feu_ar_gauche", zone: "optiques", label: "Feu arrière gauche — cassé ou rayure profonde", prix: 180 },
+  { id: "feu_ar_droit", zone: "optiques", label: "Feu arrière droit — cassé ou rayure profonde", prix: 180 },
   // ROUES
   { id: "jante", zone: "roues", label: "Jantes — déformations, enlèvement de matière", prix: 150 },
   { id: "pneumatiques", zone: "roues", label: "Pneumatiques par paire — usure > 50%", prix: 300 },
@@ -176,6 +179,13 @@ const VETUSTE = [
   {annee:1,taux:0},{annee:2,taux:0},{annee:3,taux:-20},{annee:4,taux:-25},
   {annee:5,taux:-30},{annee:6,taux:-35},{annee:7,taux:-40},{annee:8,taux:-45},
   {annee:9,taux:-50},{annee:10,taux:-55},
+];
+
+const TEST_NACELLE_ITEMS = [
+  { key: "poste_haut", label: "Fonctionnement poste haut" },
+  { key: "poste_bas", label: "Fonctionnement poste bas" },
+  { key: "pompe_camion", label: "Pompe de camion" },
+  { key: "pompe_secours", label: "Pompe de secours" },
 ];
 
 const ETAT_OPTIONS = ["Bon état","Usure normale","Dégradé","Endommagé","Manquant"];
@@ -519,6 +529,73 @@ function getVetuste(annee_fab) {
 }
 function prixAvecVetuste(prix,taux) { return prix?Math.round(prix*(1+taux/100)):0; }
 
+// Résumé lecture seule des tests (affiché dans les récapitulatifs / rapports)
+function TestNacelleSummary({ tests }) {
+  const t = tests || {};
+  const hasAny = TEST_NACELLE_ITEMS.some(it => t[it.key]);
+  if(!hasAny && !t.commentaire) return null;
+  return (
+    <div className="card" style={{marginBottom:10}}>
+      <div style={{fontSize:11,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",fontWeight:700,marginBottom:10}}>Test nacelle</div>
+      <div className="g2">
+        {TEST_NACELLE_ITEMS.map(it=>{
+          const v=t[it.key];
+          const color=v==="OK"?"var(--ok)":v==="KO"?"var(--danger)":"var(--muted)";
+          return (
+            <div key={it.key} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0"}}>
+              <span style={{fontSize:13}}>{it.label}</span>
+              <span className="etat-tag" style={{background:color+"22",color,border:`1px solid ${color}44`,fontWeight:700}}>{v||"—"}</span>
+            </div>
+          );
+        })}
+      </div>
+      {t.commentaire&&<div style={{marginTop:8,fontSize:12,color:"var(--danger)"}}><strong>Commentaire :</strong> {t.commentaire}</div>}
+    </div>
+  );
+}
+
+// Composant réutilisable : section "Test nacelle" (départ et retour)
+function TestNacelle({ tests, onChange }) {
+  const t = tests || {};
+  const set = (k, v) => onChange({ ...t, [k]: v });
+  const anyKO = TEST_NACELLE_ITEMS.some(it => t[it.key] === "KO");
+  return (
+    <div className="card" style={{marginBottom:14,border:"1px solid var(--border)"}}>
+      <div className="section-title" style={{marginBottom:12}}>Test nacelle</div>
+      {TEST_NACELLE_ITEMS.map(it => (
+        <div key={it.key} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid var(--border)"}}>
+          <span style={{fontWeight:600,fontSize:14}}>{it.label}</span>
+          <div style={{display:"flex",gap:6}}>
+            <button type="button" className="btn btn-sm" style={{background:t[it.key]==="OK"?"var(--ok)":"var(--bg3)",color:t[it.key]==="OK"?"#fff":"var(--muted)",padding:"6px 16px"}} onClick={()=>set(it.key, t[it.key]==="OK"?"":"OK")}>OK</button>
+            <button type="button" className="btn btn-sm" style={{background:t[it.key]==="KO"?"var(--danger)":"var(--bg3)",color:t[it.key]==="KO"?"#fff":"var(--muted)",padding:"6px 16px"}} onClick={()=>set(it.key, t[it.key]==="KO"?"":"KO")}>KO</button>
+          </div>
+        </div>
+      ))}
+      {anyKO && (
+        <div style={{marginTop:12}}>
+          <label>Commentaire (un test est KO)</label>
+          <textarea rows={2} value={t.commentaire||""} onChange={e=>set("commentaire",e.target.value)} placeholder="Décrivez le dysfonctionnement..." style={{resize:"vertical"}}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Génère le bloc HTML des tests nacelle pour les rapports
+function testNacelleHTML(tests) {
+  if(!tests) return "";
+  const rows = TEST_NACELLE_ITEMS.map(it=>{
+    const v = tests[it.key];
+    const color = v==="OK" ? "#208040" : v==="KO" ? "#c03030" : "#888";
+    const txt = v || "—";
+    return `<tr><td style="padding:6px 0;color:#444;font-size:13px;">${it.label}</td><td style="padding:6px 0;text-align:right;font-weight:700;color:${color};">${txt}</td></tr>`;
+  }).join("");
+  const comment = tests.commentaire ? `<div style="margin-top:8px;font-size:12px;color:#c03030;"><strong>Commentaire :</strong> ${tests.commentaire}</div>` : "";
+  return `<p style="color:#1a2a6e;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:2px;margin:18px 0 8px;">Test nacelle</p>
+    <table style="width:100%;border-collapse:collapse;">${rows}</table>${comment}`;
+}
+
+
 export default function App() {
   const [view,setView]=useState("home");
   const [dossiers,setDossiers]=useState({});
@@ -540,7 +617,8 @@ export default function App() {
   const [tarifForm,setTarifForm]=useState({zone:"",label:"",prix:"",surDevis:false});
   const [tarifEdit,setTarifEdit]=useState(null);
 
-  const [depForm,setDepForm]=useState({immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});
+  const [depForm,setDepForm]=useState({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});
+  const [depTests,setDepTests]=useState({});
   const [depZones,setDepZones]=useState({});
   const [depPhotos,setDepPhotos]=useState({});
   const [depStep,setDepStep]=useState(0);
@@ -586,15 +664,17 @@ export default function App() {
 
   function resumeDraft(draft) {
     if(draft.type==="depart") {
-      setDepForm(draft.data.depForm || {immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});
+      setDepForm(draft.data.depForm || {immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});
       setDepZones(draft.data.depZones || {});
+      setDepTests(draft.data.depTests || {});
       setDepPhotos(draft.data.depPhotos || {});
       setDepStep(draft.data.depStep || 1);
       setCommercialPhotos(draft.data.commercialPhotos || {});
       setView("depart");
     } else if(draft.type==="retour") {
-      setRetForm(draft.data.retForm || {date:todayISO(),heures:"",km_porteur:"",agent:"",immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:""});
+      setRetForm(draft.data.retForm || {date:todayISO(),heures:"",km_porteur:"",agent:"",immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:""});
       setRetZones(draft.data.retZones || {});
+      setRetTests(draft.data.retTests || {});
       setRetPhotos(draft.data.retPhotos || {});
       setRetDegats(draft.data.retDegats || []);
       setRetNote(draft.data.retNote || "");
@@ -611,7 +691,8 @@ export default function App() {
   const [commercialPhotos,setCommercialPhotos]=useState({}); // { "av_droit": base64, "ar_gauche": base64 }
   const [processingPhoto,setProcessingPhoto]=useState(null); // clé en cours de traitement
 
-  const [retForm,setRetForm]=useState({date:todayISO(),heures:"",km_porteur:"",agent:"",immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:""});
+  const [retForm,setRetForm]=useState({date:todayISO(),heures:"",km_porteur:"",agent:"",immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:""});
+  const [retTests,setRetTests]=useState({});
   const [retZones,setRetZones]=useState({});
   const [retPhotos,setRetPhotos]=useState({});
   const [retDegats,setRetDegats]=useState([]);
@@ -640,16 +721,16 @@ export default function App() {
   // Auto-save DÉPART (brouillon)
   useEffect(()=>{
     if(view==="depart" && depStep > 0) {
-      saveDraft("depart", { depForm, depZones, depPhotos, depStep, commercialPhotos });
+      saveDraft("depart", { depForm, depZones, depTests, depPhotos, depStep, commercialPhotos });
     }
-  },[view, depForm, depZones, depPhotos, depStep, commercialPhotos]);
+  },[view, depForm, depZones, depTests, depPhotos, depStep, commercialPhotos]);
 
   // Auto-save RETOUR (brouillon)
   useEffect(()=>{
     if(view==="retour" && retStep >= 1) {
-      saveDraft("retour", { retForm, retZones, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, searchImmat, emailClient });
+      saveDraft("retour", { retForm, retZones, retTests, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, searchImmat, emailClient });
     }
-  },[view, retForm, retZones, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, emailClient]);
+  },[view, retForm, retZones, retTests, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, emailClient]);
 
   // Détection brouillon au démarrage
   useEffect(()=>{
@@ -734,7 +815,15 @@ export default function App() {
     try {
       const snap=await getDocs(collection(db,"dossiers")); const result={}; snap.docs.forEach(d=>{result[d.id]=d.data();}); setDossiers(result);
       const zC=await fbGetConfig("zones"); if(zC?.data) setZones(zC.data);
-      const tC=await fbGetConfig("tarifs"); if(tC?.data) setTarifs(tC.data);
+      const tC=await fbGetConfig("tarifs");
+      if(tC?.data){
+        const loaded=tC.data;
+        // Ajoute les postes par défaut manquants (ex: nouveaux feux dissociés) sans écraser les prix existants
+        const missing=DEFAULT_TARIFS.filter(dt=>!loaded.some(t=>t.id===dt.id));
+        setTarifs(missing.length?[...loaded,...missing]:loaded);
+      } else {
+        setTarifs(DEFAULT_TARIFS);
+      }
     } catch(e){console.error(e);}
     setLoading(false);
   }
@@ -870,7 +959,7 @@ export default function App() {
       id:genId(),
       immat:depForm.immat,
       info:{...depForm},
-      depart:{zones:depZones,photos:depPhotos,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent},
+      depart:{zones:depZones,photos:depPhotos,tests:depTests,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent},
       retour:null,
       createdAt:new Date().toISOString(),
       createdBy: currentUser?.uid || null,
@@ -885,6 +974,7 @@ export default function App() {
       retour:{
         zones:retZones,
         photos:retPhotos,
+        tests:retTests,
         degats:retDegats,
         note:retNote,
         date:retForm.date,
@@ -937,7 +1027,7 @@ export default function App() {
     return matchQ && matchStatut;
   });
 
-  function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setCommercialPhotos({});setProcessingPhoto(null);setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient("");setEmailSent(false);setDepEmailSent(false);setDepEmailSending(false); }
+  function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setCommercialPhotos({});setProcessingPhoto(null);setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient("");setEmailSent(false);setDepEmailSent(false);setDepEmailSending(false);setDepTests({});setRetTests({}); }
 
   // Show loading while checking auth
   if(authLoading) {
@@ -1012,7 +1102,7 @@ export default function App() {
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={()=>{setAdminOpen(true);setAdminAuthed(false);setAdminPwd("");}}>⚙</button>
           {view==="home"&&<>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>Expertise Retour</button>
-            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepPhotos({});}}>+ Nouveau départ</button>
+            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});}}>+ Nouveau départ</button>
           </>}
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={handleLogout} title="Déconnexion">🚪</button>
         </div>
@@ -1156,17 +1246,20 @@ export default function App() {
                 <div className="card" style={{marginBottom:14}}>
                   <div className="g3" style={{marginBottom:12}}>
                     <div><label>Immatriculation *</label><input value={depForm.immat} onChange={e=>setDepForm({...depForm,immat:e.target.value.toUpperCase()})} placeholder="AB-123-CD"/></div>
-                    <div><label>Type nacelle</label><input value={depForm.type_nacelle} onChange={e=>setDepForm({...depForm,type_nacelle:e.target.value})} placeholder="KL32, KL21B..."/></div>
-                    <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
+                    <div><label>N° de cube *</label><input value={depForm.numero_cube} onChange={e=>setDepForm({...depForm,numero_cube:e.target.value.toUpperCase()})} placeholder="Ex : C12345"/></div>
+                    <div><label>Type nacelle</label><input value={depForm.type_nacelle} onChange={e=>setDepForm({...depForm,type_nacelle:e.target.value})} placeholder="KL32/PT160/KL21/TARRIERE"/></div>
                   </div>
                   <div className="g3" style={{marginBottom:12}}>
+                    <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
                     <div><label>Date mise en circulation</label><input type="text" value={depForm.annee_fab} onChange={e=>setDepForm({...depForm,annee_fab:e.target.value})} placeholder="JJ/MM/AAAA"/></div>
                     <div><label>N° Contrat</label><input value={depForm.contrat} onChange={e=>setDepForm({...depForm,contrat:e.target.value})} placeholder="CTR-2024-055"/></div>
-                    <div><label>Client</label><input value={depForm.client} onChange={e=>setDepForm({...depForm,client:e.target.value})} placeholder="Société / client"/></div>
                   </div>
                   <div className="g3" style={{marginBottom:12}}>
+                    <div><label>Client</label><input value={depForm.client} onChange={e=>setDepForm({...depForm,client:e.target.value})} placeholder="Utilisateur / locataire"/></div>
                     <div><label>Email client</label><input type="email" value={depForm.email} onChange={e=>setDepForm({...depForm,email:e.target.value})} placeholder="client@email.com"/></div>
                     <div><label>Heures nacelle</label><input type="number" value={depForm.heures} onChange={e=>setDepForm({...depForm,heures:e.target.value})} placeholder="1 240"/></div>
+                  </div>
+                  <div className="g3" style={{marginBottom:12}}>
                     <div><label>Km porteur</label><input type="number" value={depForm.km_porteur} onChange={e=>setDepForm({...depForm,km_porteur:e.target.value})} placeholder="45 000"/></div>
                   </div>
                   <div className="g2">
@@ -1177,8 +1270,8 @@ export default function App() {
                 <div style={{display:"flex",justifyContent:"space-between"}}>
                   <button className="btn btn-outline" onClick={goHome}>← Annuler</button>
                   <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
-                    {!depForm.immat&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ L'immatriculation est obligatoire</div>}
-                    <button className="btn btn-gold" disabled={!depForm.immat} onClick={()=>setDepStep(1)}>Suivant →</button>
+                    {(!depForm.immat||!depForm.numero_cube)&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Immatriculation et N° de cube obligatoires</div>}
+                    <button className="btn btn-gold" disabled={!depForm.immat||!depForm.numero_cube} onClick={()=>setDepStep(1)}>Suivant →</button>
                   </div>
                 </div>
               </div>
@@ -1186,6 +1279,7 @@ export default function App() {
 
             {depStep===1&&(
               <div>
+                <TestNacelle tests={depTests} onChange={setDepTests} />
                 <div className="section-title">État des zones</div>
                 {zones.map(zone=>(
                   <div key={zone.id} className="zone-row">
@@ -1276,11 +1370,12 @@ export default function App() {
                 </div>
                 <div className="card" style={{marginBottom:10}}>
                   <div className="g3">
-                    {[["Immatriculation",depForm.immat],["Type nacelle",depForm.type_nacelle],["Modèle porteur",depForm.modele],["Mise en circulation",depForm.annee_fab],["Client",depForm.client],["Contrat",depForm.contrat],["Email",depForm.email],["Date",depForm.date],["Heures nacelle",depForm.heures?depForm.heures+" h":"—"],["Km porteur",depForm.km_porteur?depForm.km_porteur+" km":"—"],["Agent",depForm.agent]].map(([k,v])=>(
+                    {[["Immatriculation",depForm.immat],["N° de cube",depForm.numero_cube],["Type nacelle",depForm.type_nacelle],["Modèle porteur",depForm.modele],["Mise en circulation",depForm.annee_fab],["Client",depForm.client],["Contrat",depForm.contrat],["Email",depForm.email],["Date",depForm.date],["Heures nacelle",depForm.heures?depForm.heures+" h":"—"],["Km porteur",depForm.km_porteur?depForm.km_porteur+" km":"—"],["Agent",depForm.agent]].map(([k,v])=>(
                       <div key={k} style={{marginBottom:6}}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
                     ))}
                   </div>
                 </div>
+                <TestNacelleSummary tests={depTests} />
                 {zones.map(zone=>{
                   const z=depZones[zone.id]; const photos=depPhotos[zone.id]||[];
                   const tourPhotos=zone.id==="tour_complet"?TOUR_ANGLES.map(a=>({angle:a,photo:depPhotos[`tour_complet_${a.key}`]?.[0]})).filter(x=>x.photo):[];
@@ -1351,7 +1446,7 @@ export default function App() {
                     <div className="card" style={{marginBottom:14,border:"2px solid var(--primary)"}}>
                       <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:10,fontWeight:700}}>Dossier trouvé</div>
                       <div className="g3">
-                        {[["Immatriculation",foundDossier.immat],["Type nacelle",foundDossier.info?.type_nacelle],["Modèle porteur",foundDossier.info?.modele],["Client",foundDossier.info?.client],["Contrat",foundDossier.info?.contrat],["Départ",foundDossier.depart?.date],["Mise en circulation",foundDossier.info?.annee_fab],["Heures départ",foundDossier.depart?.heures?foundDossier.depart.heures+" h":"—"],["Km porteur départ",foundDossier.depart?.km_porteur?foundDossier.depart.km_porteur+" km":"—"]].map(([k,v])=>(
+                        {[["Immatriculation",foundDossier.immat],["N° de cube",foundDossier.info?.numero_cube],["Type nacelle",foundDossier.info?.type_nacelle],["Modèle porteur",foundDossier.info?.modele],["Client",foundDossier.info?.client],["Contrat",foundDossier.info?.contrat],["Départ",foundDossier.depart?.date],["Mise en circulation",foundDossier.info?.annee_fab],["Heures départ",foundDossier.depart?.heures?foundDossier.depart.heures+" h":"—"],["Km porteur départ",foundDossier.depart?.km_porteur?foundDossier.depart.km_porteur+" km":"—"]].map(([k,v])=>(
                           <div key={k}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
                         ))}
                       </div>
@@ -1370,7 +1465,7 @@ export default function App() {
                     </div>
                     <div style={{display:"flex",justifyContent:"space-between"}}>
                       <button className="btn btn-outline" onClick={()=>{setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>← Annuler</button>
-                      <button className="btn btn-gold" onClick={()=>{setRetZones({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
+                      <button className="btn btn-gold" onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
                     </div>
                   </div>
                 )}
@@ -1387,18 +1482,28 @@ export default function App() {
                   </div>
                   
                   <div className="g2" style={{marginBottom:12}}>
-                    <div><label>Type nacelle *</label><input value={retForm.type_nacelle||""} onChange={e=>setRetForm({...retForm,type_nacelle:e.target.value})} placeholder="Nacelle ciseau"/></div>
+                    <div><label>N° de cube</label><input value={retForm.numero_cube||""} onChange={e=>setRetForm({...retForm,numero_cube:e.target.value.toUpperCase()})} placeholder="Ex : C12345"/></div>
+                    <div><label>Type nacelle *</label><input value={retForm.type_nacelle||""} onChange={e=>setRetForm({...retForm,type_nacelle:e.target.value})} placeholder="KL32/PT160/KL21/TARRIERE"/></div>
+                  </div>
+                  
+                  <div className="g2" style={{marginBottom:12}}>
                     <div><label>Modèle porteur *</label><input value={retForm.modele||""} onChange={e=>setRetForm({...retForm,modele:e.target.value})} placeholder="Iveco Daily"/></div>
-                  </div>
-                  
-                  <div className="g2" style={{marginBottom:12}}>
                     <div><label>Année de mise en circulation</label><input type="number" value={retForm.annee_fab||""} onChange={e=>setRetForm({...retForm,annee_fab:e.target.value})} placeholder="2015"/></div>
-                    <div><label>Client *</label><input value={retForm.client||""} onChange={e=>setRetForm({...retForm,client:e.target.value})} placeholder="Nom du client"/></div>
                   </div>
                   
                   <div className="g2" style={{marginBottom:12}}>
+                    <div><label>Client *</label><input value={retForm.client||""} onChange={e=>setRetForm({...retForm,client:e.target.value})} placeholder="Utilisateur / locataire"/></div>
                     <div><label>Numéro de contrat</label><input value={retForm.contrat||""} onChange={e=>setRetForm({...retForm,contrat:e.target.value})} placeholder="CTR-2024-001"/></div>
+                  </div>
+                  
+                  <div className="g2" style={{marginBottom:12}}>
                     <div><label>Email client</label><input type="email" value={retForm.email||""} onChange={e=>setRetForm({...retForm,email:e.target.value})} placeholder="client@exemple.fr"/></div>
+                    <div><label>Date retour</label><input type="date" value={retForm.date} onChange={e=>setRetForm({...retForm,date:e.target.value})}/></div>
+                  </div>
+
+                  <div className="g2" style={{marginBottom:12}}>
+                    <div><label>Heures nacelle retour</label><input type="number" value={retForm.heures||""} onChange={e=>setRetForm({...retForm,heures:e.target.value})} placeholder="1 380"/></div>
+                    <div><label>Km porteur retour</label><input type="number" value={retForm.km_porteur||""} onChange={e=>setRetForm({...retForm,km_porteur:e.target.value})} placeholder="47 000"/></div>
                   </div>
                   
                   <div style={{fontSize:11,color:"var(--muted)",marginTop:8}}>* Champs recommandés</div>
@@ -1416,6 +1521,7 @@ export default function App() {
                         immat:searchImmat,
                         info:{
                           immat:searchImmat,
+                          numero_cube:retForm.numero_cube||"",
                           type_nacelle:retForm.type_nacelle,
                           modele:retForm.modele,
                           annee_fab:retForm.annee_fab||"",
@@ -1445,6 +1551,7 @@ export default function App() {
                       setDossiers(prev=>({...prev,[d.immat]:d}));
                       setFoundDossier(d);
                       setRetZones({});
+                      setRetTests({});
                       setRetPhotos({});
                       setRetDegats([]);
                       setRetNote("");
@@ -1464,6 +1571,7 @@ export default function App() {
             {retStep===1&&foundDossier&&(
               <div>
                 <div className="section-title">État retour — zone par zone</div>
+                <TestNacelle tests={retTests} onChange={setRetTests} />
                 {vetusteTaux!==0&&<div style={{padding:"8px 14px",background:"rgba(200,16,46,.06)",border:"1px solid rgba(200,16,46,.2)",fontSize:12,color:"var(--accent)",marginBottom:10,fontWeight:600}}>⚖ Taux de vétusté appliqué : {vetusteTaux}% sur les prix</div>}
                 {zones.map(zone=>{
                   const depZ=foundDossier.depart?.zones?.[zone.id]; const depP=foundDossier.depart?.photos?.[zone.id]||[];
@@ -1590,23 +1698,37 @@ export default function App() {
                               </div>
                               {zoneTarifs.length>0&&(
                                 <div>
-                                  <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,fontWeight:700,paddingTop:8,borderTop:"1px solid var(--border)"}}>Dégâts constatés — cochez ce qui s'applique</div>
-                                  {zoneTarifs.map(t=>(
-                                    <div key={t.id} className={`tarif-row ${retDegats.includes(t.id)?"active":""}`} onClick={()=>setRetDegats(prev=>prev.includes(t.id)?prev.filter(d=>d!==t.id):[...prev,t.id])}>
-                                      <div style={{display:"flex",alignItems:"center",gap:10}}>
-                                        <div style={{width:16,height:16,border:`2px solid ${retDegats.includes(t.id)?"var(--primary)":"var(--border2)"}`,background:retDegats.includes(t.id)?"var(--primary)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",flexShrink:0}}>{retDegats.includes(t.id)?"✓":""}</div>
-                                        <span style={{fontSize:13}}>{t.label}</span>
+                                  <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,fontWeight:700,paddingTop:8,borderTop:"1px solid var(--border)"}}>Dégâts constatés — cochez puis prenez la photo du dégât</div>
+                                  {zoneTarifs.map(t=>{
+                                    const checked=retDegats.includes(t.id);
+                                    const pkey=`degat_${t.id}`;
+                                    const dphotos=retPhotos[pkey]||[];
+                                    return (
+                                    <div key={t.id} style={{marginBottom:3}}>
+                                      <div className={`tarif-row ${checked?"active":""}`} style={{marginBottom:0}} onClick={()=>setRetDegats(prev=>prev.includes(t.id)?prev.filter(d=>d!==t.id):[...prev,t.id])}>
+                                        <div style={{display:"flex",alignItems:"center",gap:10}}>
+                                          <div style={{width:16,height:16,border:`2px solid ${checked?"var(--primary)":"var(--border2)"}`,background:checked?"var(--primary)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",flexShrink:0}}>{checked?"✓":""}</div>
+                                          <span style={{fontSize:13}}>{t.label}</span>
+                                        </div>
+                                        {t.surDevis?(
+                                          <span style={{fontSize:11,color:"var(--accent)",fontWeight:700,fontFamily:"monospace",whiteSpace:"nowrap"}}>SUR DEVIS</span>
+                                        ):(
+                                          <div style={{textAlign:"right",flexShrink:0}}>
+                                            <div className="mono" style={{color:"var(--primary)",fontSize:13,fontWeight:700}}>{prixAvecVetuste(t.prix,vetusteTaux)} €</div>
+                                            {vetusteTaux!==0&&<div style={{fontSize:9,color:"var(--muted)"}}>{t.prix}€ {vetusteTaux}%</div>}
+                                          </div>
+                                        )}
                                       </div>
-                                      {t.surDevis?(
-                                        <span style={{fontSize:11,color:"var(--accent)",fontWeight:700,fontFamily:"monospace",whiteSpace:"nowrap"}}>SUR DEVIS</span>
-                                      ):(
-                                        <div style={{textAlign:"right",flexShrink:0}}>
-                                          <div className="mono" style={{color:"var(--primary)",fontSize:13,fontWeight:700}}>{prixAvecVetuste(t.prix,vetusteTaux)} €</div>
-                                          {vetusteTaux!==0&&<div style={{fontSize:9,color:"var(--muted)"}}>{t.prix}€ {vetusteTaux}%</div>}
+                                      {checked&&(
+                                        <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",padding:"8px 12px",border:"1px solid var(--primary)",borderTop:"none",background:"rgba(26,42,110,.03)"}} onClick={e=>e.stopPropagation()}>
+                                          <span style={{fontSize:10,letterSpacing:1.5,color:"var(--muted)",textTransform:"uppercase",marginRight:4}}>Photos du dégât</span>
+                                          {dphotos.map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn btn-danger" onClick={(e)=>{e.stopPropagation();removePhoto(pkey,i,setRetPhotos);}} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
+                                          <div className="photo-add" style={{width:64,height:48,fontSize:20}} onClick={async(e)=>{e.stopPropagation();const f=await pickFile({multiple:true});if(f) addPhotos(f,pkey,setRetPhotos);}}>+</div>
                                         </div>
                                       )}
                                     </div>
-                                  ))}
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
@@ -1635,14 +1757,14 @@ export default function App() {
                 <div className="card" style={{marginBottom:14,border:"2px solid var(--primary)"}}>
                   <div style={{fontSize:11,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",fontWeight:700,marginBottom:12}}>Récapitulatif</div>
                   <div className="g3" style={{marginBottom:14}}>
-                    {[["Immatriculation",foundDossier.immat],["Client",foundDossier.info?.client],["Contrat",foundDossier.info?.contrat],["Date retour",retForm.date],["Heures départ",foundDossier.depart?.heures?foundDossier.depart.heures+" h":"—"],["Heures retour",retForm.heures?retForm.heures+" h":"—"],["Heures utilisées",foundDossier.depart?.heures&&retForm.heures?(parseInt(retForm.heures)-parseInt(foundDossier.depart.heures))+" h":"—"],["Km porteur départ",foundDossier.depart?.km_porteur?foundDossier.depart.km_porteur+" km":"—"],["Km porteur retour",retForm.km_porteur?retForm.km_porteur+" km":"—"],["Km parcourus",foundDossier.depart?.km_porteur&&retForm.km_porteur?(parseInt(retForm.km_porteur)-parseInt(foundDossier.depart.km_porteur))+" km":"—"]].map(([k,v])=>(
+                    {[["Immatriculation",foundDossier.immat],["N° de cube",foundDossier.info?.numero_cube],["Client",foundDossier.info?.client],["Contrat",foundDossier.info?.contrat],["Date retour",retForm.date],["Heures départ",foundDossier.depart?.heures?foundDossier.depart.heures+" h":"—"],["Heures retour",retForm.heures?retForm.heures+" h":"—"],["Heures utilisées",foundDossier.depart?.heures&&retForm.heures?(parseInt(retForm.heures)-parseInt(foundDossier.depart.heures))+" h":"—"],["Km porteur départ",foundDossier.depart?.km_porteur?foundDossier.depart.km_porteur+" km":"—"],["Km porteur retour",retForm.km_porteur?retForm.km_porteur+" km":"—"],["Km parcourus",foundDossier.depart?.km_porteur&&retForm.km_porteur?(parseInt(retForm.km_porteur)-parseInt(foundDossier.depart.km_porteur))+" km":"—"]].map(([k,v])=>(
                       <div key={k}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
                     ))}
                   </div>
                   {retDegats.length>0?(
                     <div>
                       <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,fontWeight:700}}>Dégâts retenus</div>
-                      {retDegats.map(id=>{const t=tarifs.find(t=>t.id===id);return t?(<div key={id} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid var(--border)",fontSize:13}}><span>{t.label}</span><span className="mono" style={{color:"var(--primary)",fontWeight:700}}>{t.surDevis?"SUR DEVIS":prixAvecVetuste(t.prix,vetusteTaux)+" €"}</span></div>):null;})}
+                      {retDegats.map(id=>{const t=tarifs.find(t=>t.id===id);const dphotos=retPhotos[`degat_${id}`]||[];return t?(<div key={id} style={{padding:"7px 0",borderBottom:"1px solid var(--border)"}}><div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span>{t.label}</span><span className="mono" style={{color:"var(--primary)",fontWeight:700}}>{t.surDevis?"SUR DEVIS":prixAvecVetuste(t.prix,vetusteTaux)+" €"}</span></div>{dphotos.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>{dphotos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>}</div>):null;})}
                       {vetusteTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Taux de vétusté appliqué : {vetusteTaux}%</div>}
                       <div className="total-strip" style={{marginTop:10}}>
                         <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>TOTAL RETENUE HT</span>
