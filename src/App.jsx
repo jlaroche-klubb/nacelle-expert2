@@ -253,6 +253,7 @@ label{font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--m
 .tab{padding:8px 18px;cursor:pointer;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;border-bottom:2px solid transparent;transition:all .2s;color:var(--muted);}
 .tab.active{color:var(--primary);border-bottom-color:var(--primary);}
 .accent-bar{height:4px;background:linear-gradient(90deg,var(--primary),var(--accent));}
+@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 .header-bar{background:var(--primary);color:#fff;padding:0 24px;height:64px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.15);}
 @media(max-width:768px){
   .header-bar{padding:0 12px;height:56px;}
@@ -717,6 +718,14 @@ export default function App() {
   const [searchDone,setSearchDone]=useState(false);
 
   useEffect(()=>{ loadAll(); },[]);
+  
+  // Avertir si fermeture de page pendant un upload de photo
+  useEffect(()=>{
+    if(uploadingCount === 0) return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ""; return ""; };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  },[uploadingCount]);
 
   // Auto-save DÉPART (brouillon)
   useEffect(()=>{
@@ -949,7 +958,47 @@ export default function App() {
     }
   }
 
-  async function addPhotos(files,zoneId,setter) { const arr=[]; for(const f of Array.from(files)) arr.push({name:f.name,url:await photoToBase64(f)}); setter(prev=>({...prev,[zoneId]:[...(prev[zoneId]||[]),...arr]})); }
+  // Compteur d'uploads en cours (pour bloquer la sauvegarde tant qu'une photo n'est pas finie d'envoyer)
+  const [uploadingCount, setUploadingCount] = useState(0);
+
+  // Détermine le contexte d'upload (depart/retour + immat) selon la vue
+  function uploadContext(zoneId) {
+    const isRetour = view === "retour";
+    const immat = isRetour ? (foundDossier?.immat || retForm.immat || searchImmat || "no-immat") : (depForm.immat || "no-immat");
+    const type = isRetour ? "retour" : "depart";
+    return { type, immat: immat.replace(/[^A-Z0-9-]/gi, "_") };
+  }
+
+  // Upload une photo (File) vers Firebase Storage et renvoie {name, url, path}
+  async function uploadPhotoToStorage(file, zoneId) {
+    const { type, immat } = uploadContext(zoneId);
+    // Compresser avant upload (max 1600px, qualité 0.82) — garde une bonne qualité commerciale
+    const base64Original = await photoToBase64(file);
+    const compressed = await compressBase64(base64Original, 1600, 0.82);
+    const timestamp = Date.now();
+    const rand = Math.random().toString(36).slice(2, 8);
+    const storagePath = `dossiers/${immat}/${type}/${zoneId}/${timestamp}_${rand}.jpg`;
+    const storageRef = ref(storage, storagePath);
+    await uploadString(storageRef, compressed, "data_url");
+    const url = await getDownloadURL(storageRef);
+    return { name: file.name, url, path: storagePath };
+  }
+
+  async function addPhotos(files, zoneId, setter) {
+    const arr = Array.from(files);
+    setUploadingCount(n => n + arr.length);
+    for (const f of arr) {
+      try {
+        const photo = await uploadPhotoToStorage(f, zoneId);
+        setter(prev => ({ ...prev, [zoneId]: [...(prev[zoneId] || []), photo] }));
+      } catch (e) {
+        console.error("Erreur upload photo:", e);
+        alert("Erreur lors de l'envoi de la photo : " + e.message);
+      } finally {
+        setUploadingCount(n => Math.max(0, n - 1));
+      }
+    }
+  }
   function removePhoto(zoneId,idx,setter) { setter(prev=>({...prev,[zoneId]:prev[zoneId].filter((_,i)=>i!==idx)})); }
   function setZE(setter,zoneId,etat) { setter(prev=>({...prev,[zoneId]:{...(prev[zoneId]||{}),etat}})); }
   function setZN(setter,zoneId,note) { setter(prev=>({...prev,[zoneId]:{...(prev[zoneId]||{}),note}})); }
@@ -1086,6 +1135,12 @@ export default function App() {
     <div style={{minHeight:"100vh",background:"var(--bg)"}}>
       <style>{css}</style>
       <div className="accent-bar"/>
+      {uploadingCount > 0 && (
+        <div style={{position:"sticky",top:0,zIndex:50,background:"linear-gradient(90deg,#1a2a6e,#c8102e)",color:"#fff",padding:"8px 16px",fontSize:12,fontWeight:700,letterSpacing:1,textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}>
+          <div style={{width:14,height:14,border:"2px solid #fff",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+          ENVOI DE {uploadingCount} PHOTO{uploadingCount > 1 ? "S" : ""} EN COURS — NE QUITTEZ PAS LA PAGE
+        </div>
+      )}
       <div className="header-bar no-print">
         <div style={{display:"flex",alignItems:"center",gap:16,cursor:"pointer"}} onClick={goHome}>
           <img src={DELTA_LOGO} alt="Delta Services" style={{height:38,objectFit:"contain",filter:"brightness(0) invert(1)"}}/>
@@ -1365,7 +1420,7 @@ export default function App() {
                     {depForm.email && (
                       <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(depForm.email, depForm.immat, "depart")}>📧 Email</button>
                     )}
-                    <button className="btn btn-gold" onClick={async()=>{await saveDepart();clearDraft("depart");goHome();}} disabled={!depForm.immat}>✓ Valider & sauvegarder</button>
+                    <button className="btn btn-gold" onClick={async()=>{await saveDepart();clearDraft("depart");goHome();}} disabled={!depForm.immat || uploadingCount > 0}>{uploadingCount > 0 ? `⏳ Upload en cours (${uploadingCount})` : "✓ Valider & sauvegarder"}</button>
                   </div>
                 </div>
                 <div className="card" style={{marginBottom:10}}>
@@ -1803,12 +1858,12 @@ export default function App() {
                   {emailClient && (
                     <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(emailClient, foundDossier.immat, "retour")}>📧 Email</button>
                   )}
-                  <button className="btn btn-gold" onClick={async()=>{
+                  <button className="btn btn-gold" disabled={uploadingCount > 0} onClick={async()=>{
                     const d=await saveRetour();
                     clearDraft("retour");
                     setActiveDossier(d);
                     setView("rapport");
-                  }}>✓ Confirmer</button>
+                  }}>{uploadingCount > 0 ? `⏳ Upload en cours (${uploadingCount})` : "✓ Confirmer"}</button>
                 </div>
               </div>
             )}
