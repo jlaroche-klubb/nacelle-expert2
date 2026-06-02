@@ -599,6 +599,7 @@ function testNacelleHTML(tests) {
 
 export default function App() {
   const [view,setView]=useState("home");
+  const [uploadingCount, setUploadingCount] = useState(0);
   const [dossiers,setDossiers]=useState({});
   const [zones,setZones]=useState(DEFAULT_ZONES);
   const [tarifs,setTarifs]=useState(DEFAULT_TARIFS);
@@ -957,9 +958,6 @@ export default function App() {
       return null;
     }
   }
-
-  // Compteur d'uploads en cours (pour bloquer la sauvegarde tant qu'une photo n'est pas finie d'envoyer)
-  const [uploadingCount, setUploadingCount] = useState(0);
 
   // Détermine le contexte d'upload (depart/retour + immat) selon la vue
   function uploadContext(zoneId) {
