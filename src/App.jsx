@@ -255,13 +255,18 @@ label{font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--m
 .accent-bar{height:4px;background:linear-gradient(90deg,var(--primary),var(--accent));}
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 .header-bar{background:var(--primary);color:#fff;padding:0 24px;height:64px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.15);}
+.header-userinfo{color:rgba(255,255,255,.8);font-size:12px;margin-right:8px;white-space:nowrap;}
+.hide-mobile{}
 @media(max-width:768px){
-  .header-bar{padding:0 12px;height:56px;}
-  .header-bar img{height:28px!important;}
-  .header-bar .header-title{font-size:11px!important;letter-spacing:1.5px!important;}
-  .header-bar .header-subtitle{font-size:7px!important;letter-spacing:1px!important;}
-  .header-bar .btn{font-size:10px;padding:6px 8px;}
-  .header-bar > div:first-child{gap:10px!important;}
+  .header-bar{padding:0 10px;height:56px;}
+  .header-bar img{height:26px!important;}
+  .header-bar .header-title{font-size:12px!important;letter-spacing:1.5px!important;white-space:nowrap;}
+  .header-bar .header-subtitle{display:none!important;}
+  .header-bar .btn{font-size:10px;padding:6px 10px;white-space:nowrap;}
+  .header-bar > div:first-child{gap:8px!important;min-width:0;}
+  .header-bar > div:last-child{gap:6px!important;}
+  .header-userinfo{display:none!important;}
+  .hide-mobile{display:none!important;}
 }
 @keyframes aiPulse{0%,80%,100%{opacity:.2}40%{opacity:1}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
@@ -1149,14 +1154,14 @@ export default function App() {
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
           {userProfile && (
-            <div style={{color:"rgba(255,255,255,.8)",fontSize:12,marginRight:8}}>
+            <div className="header-userinfo">
               👤 {userProfile.prenom} {userProfile.nom}
             </div>
           )}
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={()=>{setAdminOpen(true);setAdminAuthed(false);setAdminPwd("");}}>⚙</button>
           {view==="home"&&<>
-            <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>Expertise Retour</button>
-            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});}}>+ Nouveau départ</button>
+            <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}><span className="hide-mobile">Expertise </span>Retour</button>
+            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});}}>+ <span className="hide-mobile">Nouveau </span>Départ</button>
           </>}
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={handleLogout} title="Déconnexion">🚪</button>
         </div>
