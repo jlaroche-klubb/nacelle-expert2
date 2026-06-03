@@ -1145,10 +1145,10 @@ export default function App() {
         </div>
       )}
       <div className="header-bar no-print">
-        <div style={{display:"flex",alignItems:"center",gap:16,cursor:"pointer"}} onClick={goHome}>
+        <div style={{display:"flex",alignItems:"center",gap:16,cursor:"pointer",minWidth:0,overflow:"hidden"}} onClick={goHome}>
           <img src={DELTA_LOGO} alt="Delta Services" style={{height:38,objectFit:"contain",filter:"brightness(0) invert(1)"}}/>
           <div>
-            <div className="header-title" style={{fontFamily:"'Share Tech Mono'",fontSize:15,letterSpacing:3,color:"#fff"}}>EXPERTISE NACELLE</div>
+            <div className="header-title" style={{fontFamily:"'Share Tech Mono'",fontSize:15,letterSpacing:3,color:"#fff"}}><span className="hide-mobile">EXPERTISE </span>NACELLE</div>
             <div className="header-subtitle" style={{fontSize:10,letterSpacing:2,color:"rgba(255,255,255,.6)",textTransform:"uppercase"}}>Système d'expertise PEMP · Delta Services</div>
           </div>
         </div>
