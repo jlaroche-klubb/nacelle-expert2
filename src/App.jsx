@@ -49,27 +49,37 @@ function captureCurrentPageHTML() {
 // Renvoie l'URL publique du PDF
 async function generateAndUploadRetourPdf(element, immat) {
   if (!element) throw new Error("Élément du rapport introuvable");
-  
-  // Cloner l'élément hors écran pour ne pas perturber l'UI, et retirer les .no-print
+
+  // Clone hors écran (à gauche, en haut) pour un rendu fiable en pleine largeur A4
   const wrapper = document.createElement("div");
-  wrapper.style.cssText = "position:fixed;top:-99999px;left:0;width:794px;background:#fff;padding:20px;";
+  wrapper.style.cssText = "position:absolute;left:-10000px;top:0;width:794px;background:#ffffff;padding:20px;z-index:-1;";
   const clone = element.cloneNode(true);
   clone.querySelectorAll(".no-print").forEach(el => el.remove());
   wrapper.appendChild(clone);
   document.body.appendChild(wrapper);
-  
+
   try {
+    // Attendre le chargement des images du clone (sinon rendu blanc / images manquantes)
+    const imgs = Array.from(wrapper.querySelectorAll("img"));
+    await Promise.all(imgs.map(img => {
+      if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+      return new Promise(res => {
+        img.onload = res;
+        img.onerror = res;
+        setTimeout(res, 4000);
+      });
+    }));
+
     const opt = {
       margin: [10, 8, 10, 8],
       filename: `Restitution_${immat}.pdf`,
       image: { type: "jpeg", quality: 0.85 },
-      html2canvas: { scale: 2, useCORS: true, allowTaint: false, logging: false, backgroundColor: "#ffffff" },
+      html2canvas: { scale: 2, useCORS: true, allowTaint: false, logging: false, backgroundColor: "#ffffff", windowWidth: 794 },
       jsPDF: { unit: "mm", format: "a4", orientation: "portrait", compress: true },
       pagebreak: { mode: ["css", "legacy"] }
     };
     const pdfBlob = await html2pdf().set(opt).from(wrapper).outputPdf("blob");
-    
-    // Upload sur Firebase Storage
+
     const cleanImmat = (immat || "no-immat").replace(/[^A-Z0-9-]/gi, "_");
     const storagePath = `rapports/${cleanImmat}_retour_${Date.now()}.pdf`;
     const storageRef = ref(storage, storagePath);
