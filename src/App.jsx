@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { db, auth, googleProvider, storage } from "./firebase";
 import { collection, doc, setDoc, getDocs, deleteDoc, getDoc, updateDoc } from "firebase/firestore";
-import { getStorage, ref, uploadString, getDownloadURL } from "firebase/storage";
+import { getStorage, ref, uploadString, uploadBytes, getDownloadURL } from "firebase/storage";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
+import html2pdf from "html2pdf.js";
 
 const ADMIN_PASSWORD = "nacelle2024";
 const EMAIL_CC = "assistanat.commerce@delta-services.fr";
@@ -44,6 +45,42 @@ function captureCurrentPageHTML() {
   return '<!DOCTYPE html>\n' + clone.outerHTML;
 }
 
+// Génère un PDF à partir d'un élément DOM et l'upload sur Firebase Storage
+// Renvoie l'URL publique du PDF
+async function generateAndUploadRetourPdf(element, immat) {
+  if (!element) throw new Error("Élément du rapport introuvable");
+  
+  // Cloner l'élément hors écran pour ne pas perturber l'UI, et retirer les .no-print
+  const wrapper = document.createElement("div");
+  wrapper.style.cssText = "position:fixed;top:-99999px;left:0;width:794px;background:#fff;padding:20px;";
+  const clone = element.cloneNode(true);
+  clone.querySelectorAll(".no-print").forEach(el => el.remove());
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
+  
+  try {
+    const opt = {
+      margin: [10, 8, 10, 8],
+      filename: `Restitution_${immat}.pdf`,
+      image: { type: "jpeg", quality: 0.85 },
+      html2canvas: { scale: 2, useCORS: true, allowTaint: false, logging: false, backgroundColor: "#ffffff" },
+      jsPDF: { unit: "mm", format: "a4", orientation: "portrait", compress: true },
+      pagebreak: { mode: ["css", "legacy"] }
+    };
+    const pdfBlob = await html2pdf().set(opt).from(wrapper).outputPdf("blob");
+    
+    // Upload sur Firebase Storage
+    const cleanImmat = (immat || "no-immat").replace(/[^A-Z0-9-]/gi, "_");
+    const storagePath = `rapports/${cleanImmat}_retour_${Date.now()}.pdf`;
+    const storageRef = ref(storage, storagePath);
+    await uploadBytes(storageRef, pdfBlob, { contentType: "application/pdf" });
+    const url = await getDownloadURL(storageRef);
+    return { url, path: storagePath };
+  } finally {
+    document.body.removeChild(wrapper);
+  }
+}
+
 // Helper function to open mailto with pre-filled email (and link on mobile)
 async function openEmailClient(emailTo, immat, reportType = "depart") {
   const isDepart = reportType === "depart";
@@ -55,23 +92,48 @@ async function openEmailClient(emailTo, immat, reportType = "depart") {
     ? `Bonjour,\n\nVeuillez trouver ci-dessous le constat d'état de départ de la nacelle ${immat}.\n\nCe document fera référence lors de la restitution.\n\n`
     : `Bonjour,\n\nSuite à la restitution de la nacelle ${immat}, veuillez trouver ci-dessous le rapport complet (départ + retour).\n\n`;
   
-  // Check if mobile
+  // Mobile (pour l'état de départ : lien dans l'e-mail uniquement)
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-  
-  if (isMobile) {
+
+  if (reportType === "retour") {
+    // Rapport de restitution : toujours uploadé + lien conservé sur le dossier (Delta VO / facture)
     try {
-      // Generate and upload HTML report
       const htmlContent = captureCurrentPageHTML();
       const reportUrl = await uploadReportToStorage(htmlContent, immat, reportType);
-      
-      // Add link to email body
-      body += `📄 Rapport complet :\n${reportUrl}\n\n`;
+      body += `📄 Rapport complet :
+${reportUrl}
+
+`;
+      try {
+        await updateDoc(doc(db, "dossiers", immat), {
+          rapport_url: reportUrl,
+          rapport_url_at: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.error('Persist rapport_url failed:', e);
+      }
     } catch (error) {
       console.error('Upload failed:', error);
-      body += `(Le lien du rapport n'a pas pu être généré)\n\n`;
+      body += `(Le lien du rapport n'a pas pu être généré)
+
+`;
+    }
+  } else if (isMobile) {
+    try {
+      const htmlContent = captureCurrentPageHTML();
+      const reportUrl = await uploadReportToStorage(htmlContent, immat, reportType);
+      body += `📄 Rapport complet :
+${reportUrl}
+
+`;
+    } catch (error) {
+      console.error('Upload failed:', error);
+      body += `(Le lien du rapport n'a pas pu être généré)
+
+`;
     }
   }
-  
+
   body += `Cordialement,\nDelta Services\n14 Avenue James de Rothschild · 77164 Ferrières-en-Brie\nTél. +33 (0)1 60 95 47 80`;
   
   const mailtoLink = `mailto:${emailTo}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}&cc=${EMAIL_CC}`;
@@ -255,18 +317,13 @@ label{font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--m
 .accent-bar{height:4px;background:linear-gradient(90deg,var(--primary),var(--accent));}
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 .header-bar{background:var(--primary);color:#fff;padding:0 24px;height:64px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.15);}
-.header-userinfo{color:rgba(255,255,255,.8);font-size:12px;margin-right:8px;white-space:nowrap;}
-.hide-mobile{}
 @media(max-width:768px){
-  .header-bar{padding:0 10px;height:56px;}
-  .header-bar img{height:26px!important;}
-  .header-bar .header-title{font-size:12px!important;letter-spacing:1.5px!important;white-space:nowrap;}
-  .header-bar .header-subtitle{display:none!important;}
-  .header-bar .btn{font-size:10px;padding:6px 10px;white-space:nowrap;}
-  .header-bar > div:first-child{gap:8px!important;min-width:0;}
-  .header-bar > div:last-child{gap:6px!important;}
-  .header-userinfo{display:none!important;}
-  .hide-mobile{display:none!important;}
+  .header-bar{padding:0 12px;height:56px;}
+  .header-bar img{height:28px!important;}
+  .header-bar .header-title{font-size:11px!important;letter-spacing:1.5px!important;}
+  .header-bar .header-subtitle{font-size:7px!important;letter-spacing:1px!important;}
+  .header-bar .btn{font-size:10px;padding:6px 8px;}
+  .header-bar > div:first-child{gap:10px!important;}
 }
 @keyframes aiPulse{0%,80%,100%{opacity:.2}40%{opacity:1}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
@@ -605,6 +662,7 @@ function testNacelleHTML(tests) {
 export default function App() {
   const [view,setView]=useState("home");
   const [uploadingCount, setUploadingCount] = useState(0);
+  const [savingRetour, setSavingRetour] = useState(false);
   const [dossiers,setDossiers]=useState({});
   const [zones,setZones]=useState(DEFAULT_ZONES);
   const [tarifs,setTarifs]=useState(DEFAULT_TARIFS);
@@ -1021,6 +1079,24 @@ export default function App() {
   }
   async function saveRetour() {
     if(!foundDossier) return;
+    
+    // Génération du PDF de restitution (côté navigateur) + upload Firebase Storage
+    let pdfInfo = null;
+    try {
+      const recapEl = document.getElementById("retour-recap-content");
+      if (recapEl) {
+        const result = await generateAndUploadRetourPdf(recapEl, foundDossier.immat);
+        pdfInfo = { pdf_url: result.url, pdf_path: result.path, pdf_generated_at: new Date().toISOString() };
+      } else {
+        console.warn("Élément #retour-recap-content introuvable, PDF non généré");
+      }
+    } catch(e) {
+      console.error("Erreur génération/upload PDF:", e);
+      // On poursuit la sauvegarde même si la génération PDF échoue,
+      // pour ne pas bloquer l'expert. Il pourra régénérer plus tard.
+      alert("⚠ Le PDF du rapport n'a pas pu être généré : " + e.message + "\nLe dossier sera quand même sauvegardé.");
+    }
+    
     const updated={
       ...foundDossier,
       info:{...foundDossier.info, numero_cube: retForm.numero_cube || foundDossier.info?.numero_cube || ""},
@@ -1034,7 +1110,8 @@ export default function App() {
         heures:retForm.heures,
         km_porteur:retForm.km_porteur,
         agent:retForm.agent,
-        commercialPhotos:retCommercialPhotos // Save commercial photos (detoured) URLs
+        commercialPhotos:retCommercialPhotos, // Save commercial photos (detoured) URLs
+        ...(pdfInfo || {})
       },
       synced_to_delta_vo: false, // Marqueur pour synchronisation avec Delta VO
       updatedAt:new Date().toISOString(),
@@ -1145,23 +1222,23 @@ export default function App() {
         </div>
       )}
       <div className="header-bar no-print">
-        <div style={{display:"flex",alignItems:"center",gap:16,cursor:"pointer",minWidth:0,overflow:"hidden"}} onClick={goHome}>
+        <div style={{display:"flex",alignItems:"center",gap:16,cursor:"pointer"}} onClick={goHome}>
           <img src={DELTA_LOGO} alt="Delta Services" style={{height:38,objectFit:"contain",filter:"brightness(0) invert(1)"}}/>
           <div>
-            <div className="header-title" style={{fontFamily:"'Share Tech Mono'",fontSize:15,letterSpacing:3,color:"#fff"}}><span className="hide-mobile">EXPERTISE </span>NACELLE</div>
+            <div className="header-title" style={{fontFamily:"'Share Tech Mono'",fontSize:15,letterSpacing:3,color:"#fff"}}>EXPERTISE NACELLE</div>
             <div className="header-subtitle" style={{fontSize:10,letterSpacing:2,color:"rgba(255,255,255,.6)",textTransform:"uppercase"}}>Système d'expertise PEMP · Delta Services</div>
           </div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
           {userProfile && (
-            <div className="header-userinfo">
+            <div style={{color:"rgba(255,255,255,.8)",fontSize:12,marginRight:8}}>
               👤 {userProfile.prenom} {userProfile.nom}
             </div>
           )}
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={()=>{setAdminOpen(true);setAdminAuthed(false);setAdminPwd("");}}>⚙</button>
           {view==="home"&&<>
-            <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}><span className="hide-mobile">Expertise </span>Retour</button>
-            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});}}>+ <span className="hide-mobile">Nouveau </span>Départ</button>
+            <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>Expertise Retour</button>
+            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});}}>+ Nouveau départ</button>
           </>}
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={handleLogout} title="Déconnexion">🚪</button>
         </div>
@@ -1817,7 +1894,7 @@ export default function App() {
             )}
 
             {retStep===2&&foundDossier&&(
-              <div>
+              <div id="retour-recap-content">
                 <div className="section-title">Validation finale</div>
                 <div className="card" style={{marginBottom:14,border:"2px solid var(--primary)"}}>
                   <div style={{fontSize:11,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",fontWeight:700,marginBottom:12}}>Récapitulatif</div>
@@ -1861,12 +1938,17 @@ export default function App() {
                   {emailClient && (
                     <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(emailClient, foundDossier.immat, "retour")}>📧 Email</button>
                   )}
-                  <button className="btn btn-gold" disabled={uploadingCount > 0} onClick={async()=>{
-                    const d=await saveRetour();
-                    clearDraft("retour");
-                    setActiveDossier(d);
-                    setView("rapport");
-                  }}>{uploadingCount > 0 ? `⏳ Upload en cours (${uploadingCount})` : "✓ Confirmer"}</button>
+                  <button className="btn btn-gold" disabled={uploadingCount > 0 || savingRetour} onClick={async()=>{
+                    setSavingRetour(true);
+                    try {
+                      const d=await saveRetour();
+                      clearDraft("retour");
+                      setActiveDossier(d);
+                      setView("rapport");
+                    } finally {
+                      setSavingRetour(false);
+                    }
+                  }}>{uploadingCount > 0 ? `⏳ Upload en cours (${uploadingCount})` : savingRetour ? "📄 Génération du PDF..." : "✓ Confirmer"}</button>
                 </div>
               </div>
             )}
