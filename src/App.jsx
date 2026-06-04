@@ -49,17 +49,21 @@ function captureCurrentPageHTML() {
 // Renvoie l'URL publique du PDF
 async function generateAndUploadRetourPdf(element, immat) {
   if (!element) throw new Error("Élément du rapport introuvable");
+  console.log("📄 [PDF] Début génération pour", immat);
+  console.log("📄 [PDF] Élément trouvé, dimensions:", element.offsetWidth, "x", element.offsetHeight);
 
   // Attendre que toutes les images soient chargées avant la capture
   const imgs = Array.from(element.querySelectorAll("img"));
-  await Promise.all(imgs.map(img => {
+  console.log("📄 [PDF] Images dans l'élément:", imgs.length);
+  await Promise.all(imgs.map((img, i) => {
     if (img.complete && img.naturalWidth > 0) return Promise.resolve();
     return new Promise(res => {
-      img.onload = res;
-      img.onerror = res;
-      setTimeout(res, 4000);
+      img.onload = () => { console.log("📄 [PDF] Image", i, "chargée"); res(); };
+      img.onerror = (e) => { console.warn("📄 [PDF] Image", i, "échouée:", img.src.substring(0, 80), e); res(); };
+      setTimeout(() => { console.warn("📄 [PDF] Image", i, "timeout 4s"); res(); }, 4000);
     });
   }));
+  console.log("📄 [PDF] Toutes les images traitées");
 
   const opt = {
     margin: [10, 8, 10, 8],
@@ -69,26 +73,29 @@ async function generateAndUploadRetourPdf(element, immat) {
       scale: 2,
       useCORS: true,
       allowTaint: false,
-      logging: false,
+      logging: true, // Active les logs de html2canvas pour debug
       backgroundColor: "#ffffff",
-      // html2canvas clone le DOM en interne ; on retire les .no-print du clone
-      // pour exclure les boutons d'action sans toucher au DOM visible
       onclone: (clonedDoc) => {
-        clonedDoc.querySelectorAll(".no-print").forEach(el => el.remove());
+        const removed = clonedDoc.querySelectorAll(".no-print");
+        console.log("📄 [PDF] onclone: retrait de", removed.length, "éléments .no-print");
+        removed.forEach(el => el.remove());
       }
     },
     jsPDF: { unit: "mm", format: "a4", orientation: "portrait", compress: true },
     pagebreak: { mode: ["css", "legacy"] }
   };
 
-  // Capture directement l'élément visible (plus fiable qu'un clone hors écran)
+  console.log("📄 [PDF] Lancement html2pdf...");
   const pdfBlob = await html2pdf().set(opt).from(element).outputPdf("blob");
+  console.log("📄 [PDF] Blob généré, taille:", pdfBlob.size, "octets");
 
   const cleanImmat = (immat || "no-immat").replace(/[^A-Z0-9-]/gi, "_");
   const storagePath = `rapports/${cleanImmat}_retour_${Date.now()}.pdf`;
   const storageRef = ref(storage, storagePath);
+  console.log("📄 [PDF] Upload vers", storagePath);
   await uploadBytes(storageRef, pdfBlob, { contentType: "application/pdf" });
   const url = await getDownloadURL(storageRef);
+  console.log("📄 [PDF] Terminé, URL:", url);
   return { url, path: storagePath };
 }
 
