@@ -50,45 +50,46 @@ function captureCurrentPageHTML() {
 async function generateAndUploadRetourPdf(element, immat) {
   if (!element) throw new Error("Élément du rapport introuvable");
 
-  // Clone hors écran (à gauche, en haut) pour un rendu fiable en pleine largeur A4
-  const wrapper = document.createElement("div");
-  wrapper.style.cssText = "position:absolute;left:-10000px;top:0;width:794px;background:#ffffff;padding:20px;z-index:-1;";
-  const clone = element.cloneNode(true);
-  clone.querySelectorAll(".no-print").forEach(el => el.remove());
-  wrapper.appendChild(clone);
-  document.body.appendChild(wrapper);
+  // Attendre que toutes les images soient chargées avant la capture
+  const imgs = Array.from(element.querySelectorAll("img"));
+  await Promise.all(imgs.map(img => {
+    if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+    return new Promise(res => {
+      img.onload = res;
+      img.onerror = res;
+      setTimeout(res, 4000);
+    });
+  }));
 
-  try {
-    // Attendre le chargement des images du clone (sinon rendu blanc / images manquantes)
-    const imgs = Array.from(wrapper.querySelectorAll("img"));
-    await Promise.all(imgs.map(img => {
-      if (img.complete && img.naturalWidth > 0) return Promise.resolve();
-      return new Promise(res => {
-        img.onload = res;
-        img.onerror = res;
-        setTimeout(res, 4000);
-      });
-    }));
+  const opt = {
+    margin: [10, 8, 10, 8],
+    filename: `Restitution_${immat}.pdf`,
+    image: { type: "jpeg", quality: 0.85 },
+    html2canvas: {
+      scale: 2,
+      useCORS: true,
+      allowTaint: false,
+      logging: false,
+      backgroundColor: "#ffffff",
+      // html2canvas clone le DOM en interne ; on retire les .no-print du clone
+      // pour exclure les boutons d'action sans toucher au DOM visible
+      onclone: (clonedDoc) => {
+        clonedDoc.querySelectorAll(".no-print").forEach(el => el.remove());
+      }
+    },
+    jsPDF: { unit: "mm", format: "a4", orientation: "portrait", compress: true },
+    pagebreak: { mode: ["css", "legacy"] }
+  };
 
-    const opt = {
-      margin: [10, 8, 10, 8],
-      filename: `Restitution_${immat}.pdf`,
-      image: { type: "jpeg", quality: 0.85 },
-      html2canvas: { scale: 2, useCORS: true, allowTaint: false, logging: false, backgroundColor: "#ffffff", windowWidth: 794 },
-      jsPDF: { unit: "mm", format: "a4", orientation: "portrait", compress: true },
-      pagebreak: { mode: ["css", "legacy"] }
-    };
-    const pdfBlob = await html2pdf().set(opt).from(wrapper).outputPdf("blob");
+  // Capture directement l'élément visible (plus fiable qu'un clone hors écran)
+  const pdfBlob = await html2pdf().set(opt).from(element).outputPdf("blob");
 
-    const cleanImmat = (immat || "no-immat").replace(/[^A-Z0-9-]/gi, "_");
-    const storagePath = `rapports/${cleanImmat}_retour_${Date.now()}.pdf`;
-    const storageRef = ref(storage, storagePath);
-    await uploadBytes(storageRef, pdfBlob, { contentType: "application/pdf" });
-    const url = await getDownloadURL(storageRef);
-    return { url, path: storagePath };
-  } finally {
-    document.body.removeChild(wrapper);
-  }
+  const cleanImmat = (immat || "no-immat").replace(/[^A-Z0-9-]/gi, "_");
+  const storagePath = `rapports/${cleanImmat}_retour_${Date.now()}.pdf`;
+  const storageRef = ref(storage, storagePath);
+  await uploadBytes(storageRef, pdfBlob, { contentType: "application/pdf" });
+  const url = await getDownloadURL(storageRef);
+  return { url, path: storagePath };
 }
 
 // Helper function to open mailto with pre-filled email (and link on mobile)
