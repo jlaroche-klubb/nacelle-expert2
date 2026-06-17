@@ -724,6 +724,9 @@ export default function App() {
         if(light.retPhotos) light.retPhotos = {};
         if(light.commercialPhotos) light.commercialPhotos = {};
         if(light.retCommercialPhotos) light.retCommercialPhotos = {};
+        // Le dossier départ peut être volumineux (anciennes photos base64) → on ne garde que l'immat.
+        // À la reprise, le dossier complet est rechargé depuis la mémoire (state "dossiers").
+        if(light.foundDossier) light.foundDossier = { immat: light.foundDossier.immat };
         localStorage.setItem(`nacelle_draft_${type}`, JSON.stringify({...light, savedAt: new Date().toISOString(), photosLost: true}));
         console.log(`💾 Brouillon ${type} sauvegardé (sans photos)`);
       } catch(e2) { console.error("Impossible de sauvegarder le brouillon:", e2); }
@@ -763,7 +766,9 @@ export default function App() {
       setRetNote(draft.data.retNote || "");
       setRetStep(draft.data.retStep || 1);
       setRetCommercialPhotos(draft.data.retCommercialPhotos || {});
-      setFoundDossier(draft.data.foundDossier || null);
+      // Recharge le dossier complet depuis la mémoire (évite un brouillon tronqué + données à jour)
+      const fdImmat = draft.data.foundDossier?.immat;
+      setFoundDossier((fdImmat && dossiers[fdImmat]) || draft.data.foundDossier || null);
       setSearchImmat(draft.data.searchImmat || "");
       setEmailClient(draft.data.emailClient || "");
       setView("retour");
