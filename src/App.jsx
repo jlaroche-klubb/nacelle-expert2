@@ -828,6 +828,19 @@ export default function App() {
     }
   },[view, retForm, retZones, retTests, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, emailClient]);
 
+  // Reprise retour : ré-injecte le dossier départ complet depuis la mémoire
+  // (la liste "dossiers" se charge en asynchrone, et un brouillon tronqué ne contient que l'immat).
+  // Évite l'écran vide à la reprise ET protège les données de départ lors de la validation.
+  useEffect(()=>{
+    if(view!=="retour" || retStep < 1) return;
+    const immat = foundDossier?.immat || retForm.immat || searchImmat;
+    if(!immat) return;
+    const full = dossiers[immat];
+    if(full && (!foundDossier || !foundDossier.info)) {
+      setFoundDossier(full);
+    }
+  },[view, retStep, dossiers, foundDossier, retForm.immat, searchImmat]);
+
   // Détection brouillon au démarrage
   useEffect(()=>{
     const depDraft = loadDraft("depart");
