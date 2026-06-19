@@ -389,6 +389,27 @@ async function removeBackground(base64) {
   } catch(e) { console.error("Remove.bg:", e); return null; }
 }
 
+// Variante Pro+ qui détoure depuis une URL déjà stockée. remove.bg va chercher l'image
+// côté serveur (image_url) => aucune lecture cross-origin dans le navigateur, donc pas de CORS.
+async function removeBackgroundFromUrl(imageUrl) {
+  try {
+    const form = new FormData();
+    form.append("image_url", imageUrl);
+    form.append("size", "4k");
+    form.append("type", "car");
+    form.append("shadow_type", "drop");
+    form.append("shadow_opacity", "55");
+    const resp = await fetch("https://api.remove.bg/v1.0/removebg", {
+      method: "POST",
+      headers: { "X-Api-Key": REMOVE_BG_KEY },
+      body: form
+    });
+    if (!resp.ok) throw new Error("Remove.bg erreur " + resp.status);
+    const outBlob = await resp.blob();
+    return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(outBlob); });
+  } catch(e) { console.error("Remove.bg (url):", e); return null; }
+}
+
 async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
   return new Promise(res => {
     const W = 1080, H = 1080;
@@ -702,6 +723,8 @@ export default function App() {
   const [filterStatut,setFilterStatut]=useState("tous"); // tous | location | retour | sans_depart
   const [showStats,setShowStats]=useState(false);
   const [activeDossier,setActiveDossier]=useState(null);
+  const [regenAngle,setRegenAngle]=useState(null);    // angle commercial en cours de régénération
+  const [regenPreview,setRegenPreview]=useState({});  // { [angleKey]: base64 } aperçu avant remplacement
   const [adminOpen,setAdminOpen]=useState(false);
   const [adminAuthed,setAdminAuthed]=useState(false);
   const [adminPwd,setAdminPwd]=useState("");
@@ -1207,6 +1230,51 @@ export default function App() {
   });
 
   function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setCommercialPhotos({});setProcessingPhoto(null);setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient("");setEmailSent(false);setDepEmailSent(false);setDepEmailSending(false);setDepTests({});setRetTests({}); }
+
+  // --- Régénération Pro+ d'une photo commerciale sur un dossier déjà terminé (vue rapport) ---
+  // Non destructif : on génère un aperçu, et le remplacement n'a lieu qu'après confirmation.
+  async function regenerateCommercial(angleKey) {
+    if(!activeDossier) return;
+    const origUrl = activeDossier.retour?.photos?.[`tour_complet_${angleKey}`]?.[0]?.url;
+    if(!origUrl) { alert("Photo d'origine introuvable pour cet angle."); return; }
+    setRegenAngle(angleKey);
+    try {
+      const cutout = await removeBackgroundFromUrl(origUrl);
+      if(!cutout) { alert("Échec du détourage (crédits remove.bg insuffisants ou paramètre refusé ?)."); return; }
+      const composed = await composeCommercialPhoto(cutout, activeDossier.immat, DELTA_LOGO);
+      if(!composed) { alert("Échec de la composition de la photo."); return; }
+      setRegenPreview(prev=>({...prev,[angleKey]:composed}));
+    } catch(e) {
+      console.error("Régénération:", e); alert("Erreur pendant la régénération.");
+    } finally { setRegenAngle(null); }
+  }
+
+  async function applyRegen(angleKey) {
+    const composed = regenPreview[angleKey];
+    if(!composed || !activeDossier) return;
+    setRegenAngle(angleKey);
+    try {
+      const url = await uploadDetoureedPhotoToStorage(composed, activeDossier.immat, `tour_complet_${angleKey}`, angleKey, "retour");
+      if(!url) return; // uploadDetoureedPhotoToStorage affiche déjà une alerte en cas d'échec
+      const updated = {
+        ...activeDossier,
+        retour: {
+          ...activeDossier.retour,
+          commercialPhotos: { ...(activeDossier.retour?.commercialPhotos||{}), [angleKey]: { url, type:"storage" } }
+        }
+      };
+      await fbSaveDossier(updated);
+      setDossiers(prev=>({...prev,[updated.immat]:updated}));
+      setActiveDossier(updated);
+      setRegenPreview(prev=>{ const n={...prev}; delete n[angleKey]; return n; });
+    } catch(e) {
+      console.error("Enregistrement régénération:", e); alert("Erreur à l'enregistrement.");
+    } finally { setRegenAngle(null); }
+  }
+
+  function cancelRegen(angleKey) {
+    setRegenPreview(prev=>{ const n={...prev}; delete n[angleKey]; return n; });
+  }
 
   // Show loading while checking auth
   if(authLoading) {
@@ -2093,6 +2161,36 @@ export default function App() {
             )}
             {!activeDossier.retour?.degats?.length&&activeDossier.retour&&(<div style={{marginTop:12,padding:"14px 16px",border:"1px solid rgba(48,160,80,.3)",background:"rgba(48,160,80,.06)",color:"#208040",fontSize:13,fontWeight:600}}>✓ Aucun dégât constaté — nacelle rendue conforme</div>)}
             {activeDossier.retour?.note&&<div className="card" style={{marginTop:10}}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:6}}>Notes</div><div style={{fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{activeDossier.retour.note}</div></div>}
+            {activeDossier.retour&&(
+              <div className="card no-print" style={{marginTop:10}}>
+                <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:8}}>Photos commerciales — régénération Pro+</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>Régénère le détourage (4K + ombre) à partir de la photo d'origine. Non destructif : un aperçu s'affiche, le remplacement n'a lieu qu'après confirmation. ⚠ Ne met pas à jour le PDF déjà généré ni un email déjà envoyé.</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
+                  {COMMERCIAL_ANGLES.map(ak=>{
+                    const orig=activeDossier.retour?.photos?.[`tour_complet_${ak}`]?.[0];
+                    if(!orig?.url) return null;
+                    const current=activeDossier.retour?.commercialPhotos?.[ak];
+                    const currentUrl=current?(typeof current==="object"?current.url:current):null;
+                    const preview=regenPreview[ak];
+                    const busy=regenAngle===ak;
+                    return (
+                      <div key={ak} style={{border:"1px solid var(--border)",padding:8,width:152}}>
+                        <div style={{fontSize:10,fontWeight:600,marginBottom:6}}>{ak.replace("_"," ").toUpperCase()}{preview&&<span style={{color:"var(--accent)"}}> · aperçu</span>}</div>
+                        <img src={preview||currentUrl||orig.url} alt="" style={{width:"100%",height:104,objectFit:"contain",background:"#f0f2f5"}}/>
+                        {preview?(
+                          <div style={{display:"flex",gap:6,marginTop:6}}>
+                            <button className="btn btn-gold btn-sm" disabled={busy} onClick={()=>applyRegen(ak)}>{busy?"…":"✓ Remplacer"}</button>
+                            <button className="btn btn-outline btn-sm" disabled={busy} onClick={()=>cancelRegen(ak)}>✕</button>
+                          </div>
+                        ):(
+                          <button className="btn btn-blue btn-sm" style={{marginTop:6,width:"100%"}} disabled={busy} onClick={()=>regenerateCommercial(ak)}>{busy?"Génération…":"↻ Régénérer"}</button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div style={{marginTop:6,padding:"10px 14px",background:"#f8f9fb",border:"1px solid var(--border)",fontSize:11,color:"var(--muted)",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
               <span>DELTA SERVICES / 14 Avenue James de Rothschild / 77164 Ferrières-en-Brie · Tel. +33 (0)1 60 95 47 80 · Siret : 512 252 792 00050</span>
               <span style={{fontWeight:600,color:"var(--primary)"}}>© {new Date().getFullYear()} Delta Services · Tous droits réservés</span>
