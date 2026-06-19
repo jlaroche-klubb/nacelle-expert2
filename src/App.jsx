@@ -373,7 +373,11 @@ async function removeBackground(base64) {
     const blob = await res.blob();
     const form = new FormData();
     form.append("image_file", blob);
-    form.append("size", "auto");
+    // Pro+ : haute résolution 4K + détection véhicule + ombre portée
+    form.append("size", "4k");          // qualité 4K (consomme plus de crédits que "auto")
+    form.append("type", "car");         // détection orientée véhicule (nacelle/PEMP)
+    form.append("shadow_type", "drop"); // ombre portée (options: drop, car, 3D, none)
+    form.append("shadow_opacity", "55");
     const resp = await fetch("https://api.remove.bg/v1.0/removebg", {
       method: "POST",
       headers: { "X-Api-Key": REMOVE_BG_KEY },
@@ -394,9 +398,18 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
 
     const barH = 120;
 
-    // Fond gris clair
-    ctx.fillStyle = "#f0f2f5";
-    ctx.fillRect(0, 0, W, H);
+    // Fond extérieur dégradé (ciel -> sol) au lieu du gris plat
+    const horizon = Math.round((H - barH) * 0.62);
+    const sky = ctx.createLinearGradient(0, 0, 0, horizon);
+    sky.addColorStop(0, "#cfe0f2");
+    sky.addColorStop(1, "#eef4fb");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, horizon);
+    const ground = ctx.createLinearGradient(0, horizon, 0, H - barH);
+    ground.addColorStop(0, "#e7e9ec");
+    ground.addColorStop(1, "#cfd3d8");
+    ctx.fillStyle = ground;
+    ctx.fillRect(0, horizon, W, (H - barH) - horizon);
 
     // Bande bleue Delta en bas
     ctx.fillStyle = "#1a2a6e";
