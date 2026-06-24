@@ -9,6 +9,13 @@ const ADMIN_PASSWORD = "nacelle2024";
 const EMAIL_CC = "assistanat.commerce@delta-services.fr";
 const REMOVE_BG_KEY = "EwW4qNTWQbKeGVs1GaQkiX3W";
 const COMMERCIAL_ANGLES = ["av_droit", "av_gauche", "ar_gauche", "ar_droit"]; // Les 4 angles détourés automatiquement
+// Photos de ventes (remplies après l'expertise) — détourage Pro+ uniquement sur les 2 extérieures
+const VENTE_SLOTS = [
+  { key: "vente_3_4_av_droit", label: "3/4 avant droit", detour: true },
+  { key: "vente_3_4_ar_gauche", label: "3/4 arrière gauche", detour: true },
+  { key: "vente_habitacle_av", label: "Habitacle avant", detour: false },
+  { key: "vente_habitacle_ar", label: "Habitacle arrière", detour: false },
+];
 
 // Function to upload HTML report to Firebase Storage and get public URL
 async function uploadReportToStorage(htmlContent, immat, reportType = "depart") {
@@ -725,6 +732,7 @@ export default function App() {
   const [activeDossier,setActiveDossier]=useState(null);
   const [regenAngle,setRegenAngle]=useState(null);    // angle commercial en cours de régénération
   const [regenPreview,setRegenPreview]=useState({});  // { [angleKey]: base64 } aperçu avant remplacement
+  const [venteBusy,setVenteBusy]=useState(null);      // slot photo de ventes en cours de traitement
   const [adminOpen,setAdminOpen]=useState(false);
   const [adminAuthed,setAdminAuthed]=useState(false);
   const [adminPwd,setAdminPwd]=useState("");
@@ -1182,7 +1190,7 @@ export default function App() {
         heures:retForm.heures,
         km_porteur:retForm.km_porteur,
         agent:retForm.agent,
-        commercialPhotos:retCommercialPhotos, // Save commercial photos (detoured) URLs
+        commercialPhotos:{ ...(foundDossier.retour?.commercialPhotos||{}), ...retCommercialPhotos }, // préserve les photos de ventes ajoutées après coup
         ...(pdfInfo || {})
       },
       synced_to_delta_vo: false, // Marqueur pour synchronisation avec Delta VO
@@ -1270,6 +1278,61 @@ export default function App() {
     } catch(e) {
       console.error("Enregistrement régénération:", e); alert("Erreur à l'enregistrement.");
     } finally { setRegenAngle(null); }
+  }
+
+  // Upload brut d'une photo de ventes (habitacles) — indépendant de la vue courante
+  async function uploadVenteRaw(file, immat, slotKey) {
+    const base64 = await photoToBase64(file);
+    const compressed = await compressBase64(base64, 1600, 0.82);
+    const timestamp = Date.now();
+    const rand = Math.random().toString(36).slice(2, 8);
+    const storagePath = `photos-ventes/${immat}/${slotKey}/${timestamp}_${rand}.jpg`;
+    const storageRef = ref(storage, storagePath);
+    await uploadString(storageRef, compressed, "data_url");
+    return await getDownloadURL(storageRef);
+  }
+
+  // Capture d'une photo de ventes (après expertise). Extérieures détourées Pro+, habitacles brutes.
+  // Stockée dans retour.commercialPhotos[slot.key] et repasse le dossier en synced_to_delta_vo:false.
+  async function captureVentePhoto(slot) {
+    if(!activeDossier?.immat) return;
+    const picked = await pickFile({multiple:false});
+    if(!picked) return;
+    const file = Array.from(picked)[0];
+    if(!file) return;
+    const immat = activeDossier.immat;
+    setVenteBusy(slot.key);
+    try {
+      let url = null;
+      if(slot.detour) {
+        const b64 = await photoToBase64(file);
+        const removed = await removeBackground(b64);
+        if(!removed) throw new Error("Détourage impossible");
+        const composed = await composeCommercialPhoto(removed, immat, DELTA_LOGO);
+        if(!composed) throw new Error("Composition impossible");
+        url = await uploadDetoureedPhotoToStorage(composed, immat, slot.key, slot.key, "retour");
+      } else {
+        url = await uploadVenteRaw(file, immat, slot.key);
+      }
+      if(!url) return; // une alerte a déjà été affichée en cas d'échec d'upload
+      const updated = {
+        ...activeDossier,
+        retour: {
+          ...(activeDossier.retour||{}),
+          commercialPhotos: { ...(activeDossier.retour?.commercialPhotos||{}), [slot.key]: { url, type:"storage" } }
+        },
+        synced_to_delta_vo: false,
+        updatedAt: new Date().toISOString()
+      };
+      await fbSaveDossier(updated);
+      setDossiers(prev=>({...prev,[updated.immat]:updated}));
+      setActiveDossier(updated);
+    } catch(e) {
+      console.error("Photo de ventes:", e);
+      alert("Erreur photo de ventes : " + e.message);
+    } finally {
+      setVenteBusy(null);
+    }
   }
 
   function cancelRegen(angleKey) {
@@ -1899,33 +1962,7 @@ export default function App() {
                                         ):(<div className="photo-add" style={{width:120,height:88}} onClick={async()=>{
                                           const f=await pickFile({multiple:false});
                                           if(!f) return;
-                                          await addPhotos(f,key,setRetPhotos);
-                                          if(COMMERCIAL_ANGLES.includes(angle.key)) {
-                                            setRetProcessingPhoto(angle.key);
-                                            const b64=await photoToBase64(Array.from(f)[0]);
-                                            const removed=await removeBackground(b64);
-                                            if(removed) {
-                                              const composed=await composeCommercialPhoto(removed,foundDossier?.immat,DELTA_LOGO);
-                                              if(composed) {
-                                                // Upload to Firebase Storage
-                                                const storageURL = await uploadDetoureedPhotoToStorage(
-                                                  composed,
-                                                  foundDossier?.immat,
-                                                  key,
-                                                  angle.key,
-                                                  "retour"
-                                                );
-                                                if(storageURL) {
-                                                  setRetCommercialPhotos(prev=>({...prev,[angle.key]:{url:storageURL, type:"storage"}}));
-                                                  console.log("✅ Photo détourée uploadée:", storageURL);
-                                                } else {
-                                                  // Fallback: store base64 if upload fails
-                                                  setRetCommercialPhotos(prev=>({...prev,[angle.key]:{url:composed, type:"base64"}}));
-                                                }
-                                              }
-                                            }
-                                            setRetProcessingPhoto(null);
-                                          }
+                                          await addPhotos(f,key,setRetPhotos); // photos d'expertise brutes (plus de détourage auto)
                                         }}>+</div>)}
                                       </div>
                                     </div>
@@ -2185,6 +2222,30 @@ export default function App() {
                         ):(
                           <button className="btn btn-blue btn-sm" style={{marginTop:6,width:"100%"}} disabled={busy} onClick={()=>regenerateCommercial(ak)}>{busy?"Génération…":"↻ Régénérer"}</button>
                         )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {activeDossier.retour&&(
+              <div className="card no-print" style={{marginTop:10}}>
+                <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:8}}>Photos de ventes</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>À prendre après l'expertise. Les 2 vues extérieures sont détourées automatiquement (logo + immat), les habitacles restent brutes. Ces 4 photos partent vers Delta VO pour la fiche de ventes.</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
+                  {VENTE_SLOTS.map(slot=>{
+                    const current=activeDossier.retour?.commercialPhotos?.[slot.key];
+                    const currentUrl=current?(typeof current==="object"?current.url:current):null;
+                    const busy=venteBusy===slot.key;
+                    return (
+                      <div key={slot.key} style={{border:"1px solid var(--border)",padding:8,width:152}}>
+                        <div style={{fontSize:10,fontWeight:600,marginBottom:6}}>{slot.label}{slot.detour&&<span style={{color:"var(--accent)"}}> · Pro+</span>}</div>
+                        {currentUrl?(
+                          <img src={currentUrl} alt="" style={{width:"100%",height:104,objectFit:"contain",background:"#f0f2f5"}}/>
+                        ):(
+                          <div style={{width:"100%",height:104,background:"#f0f2f5",border:"1px dashed var(--border2)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--muted)",fontSize:24}}>+</div>
+                        )}
+                        <button className={currentUrl?"btn btn-outline btn-sm":"btn btn-blue btn-sm"} style={{marginTop:6,width:"100%"}} disabled={busy} onClick={()=>captureVentePhoto(slot)}>{busy?(slot.detour?"Détourage…":"Envoi…"):(currentUrl?"↻ Reprendre":"📷 Prendre")}</button>
                       </div>
                     );
                   })}
