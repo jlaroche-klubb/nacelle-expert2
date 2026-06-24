@@ -2200,36 +2200,6 @@ export default function App() {
             {activeDossier.retour?.note&&<div className="card" style={{marginTop:10}}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:6}}>Notes</div><div style={{fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{activeDossier.retour.note}</div></div>}
             {activeDossier.retour&&(
               <div className="card no-print" style={{marginTop:10}}>
-                <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:8}}>Photos commerciales — régénération Pro+</div>
-                <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>Régénère le détourage (4K + ombre) à partir de la photo d'origine. Non destructif : un aperçu s'affiche, le remplacement n'a lieu qu'après confirmation. ⚠ Ne met pas à jour le PDF déjà généré ni un email déjà envoyé.</div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
-                  {COMMERCIAL_ANGLES.map(ak=>{
-                    const orig=activeDossier.retour?.photos?.[`tour_complet_${ak}`]?.[0];
-                    if(!orig?.url) return null;
-                    const current=activeDossier.retour?.commercialPhotos?.[ak];
-                    const currentUrl=current?(typeof current==="object"?current.url:current):null;
-                    const preview=regenPreview[ak];
-                    const busy=regenAngle===ak;
-                    return (
-                      <div key={ak} style={{border:"1px solid var(--border)",padding:8,width:152}}>
-                        <div style={{fontSize:10,fontWeight:600,marginBottom:6}}>{ak.replace("_"," ").toUpperCase()}{preview&&<span style={{color:"var(--accent)"}}> · aperçu</span>}</div>
-                        <img src={preview||currentUrl||orig.url} alt="" style={{width:"100%",height:104,objectFit:"contain",background:"#f0f2f5"}}/>
-                        {preview?(
-                          <div style={{display:"flex",gap:6,marginTop:6}}>
-                            <button className="btn btn-gold btn-sm" disabled={busy} onClick={()=>applyRegen(ak)}>{busy?"…":"✓ Remplacer"}</button>
-                            <button className="btn btn-outline btn-sm" disabled={busy} onClick={()=>cancelRegen(ak)}>✕</button>
-                          </div>
-                        ):(
-                          <button className="btn btn-blue btn-sm" style={{marginTop:6,width:"100%"}} disabled={busy} onClick={()=>regenerateCommercial(ak)}>{busy?"Génération…":"↻ Régénérer"}</button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            {activeDossier.retour&&(
-              <div className="card no-print" style={{marginTop:10}}>
                 <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:8}}>Photos de ventes</div>
                 <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>À prendre après l'expertise. Les 2 vues extérieures sont détourées automatiquement (logo + immat), les habitacles restent brutes. Ces 4 photos partent vers Delta VO pour la fiche de ventes.</div>
                 <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
