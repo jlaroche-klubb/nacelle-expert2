@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { db, auth, googleProvider, storage } from "./firebase";
 import { collection, doc, setDoc, getDocs, deleteDoc, getDoc, updateDoc } from "firebase/firestore";
 import { getStorage, ref, uploadString, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -8,7 +8,6 @@ import html2pdf from "html2pdf.js";
 const ADMIN_PASSWORD = "nacelle2024";
 const EMAIL_CC = "assistanat.commerce@delta-services.fr";
 const REMOVE_BG_KEY = "EwW4qNTWQbKeGVs1GaQkiX3W";
-const COMMERCIAL_ANGLES = ["av_droit", "av_gauche", "ar_gauche", "ar_droit"]; // Les 4 angles détourés automatiquement
 // Photos de ventes (remplies après l'expertise) — détourage Pro+ uniquement sur les 2 extérieures
 const VENTE_SLOTS = [
   { key: "vente_3_4_av_droit", label: "3/4 avant droit", detour: true },
@@ -766,8 +765,6 @@ export default function App() {
         const light = {...data};
         if(light.depPhotos) light.depPhotos = {};
         if(light.retPhotos) light.retPhotos = {};
-        if(light.commercialPhotos) light.commercialPhotos = {};
-        if(light.retCommercialPhotos) light.retCommercialPhotos = {};
         // Le dossier départ peut être volumineux (anciennes photos base64) → on ne garde que l'immat.
         // À la reprise, le dossier complet est rechargé depuis la mémoire (state "dossiers").
         if(light.foundDossier) light.foundDossier = { immat: light.foundDossier.immat };
@@ -799,7 +796,6 @@ export default function App() {
       setDepTests(draft.data.depTests || {});
       setDepPhotos(draft.data.depPhotos || {});
       setDepStep(draft.data.depStep || 1);
-      setCommercialPhotos(draft.data.commercialPhotos || {});
       setView("depart");
     } else if(draft.type==="retour") {
       setRetForm(draft.data.retForm || {date:todayISO(),heures:"",km_porteur:"",agent:"",immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:""});
@@ -809,7 +805,6 @@ export default function App() {
       setRetDegats(draft.data.retDegats || []);
       setRetNote(draft.data.retNote || "");
       setRetStep(draft.data.retStep || 1);
-      setRetCommercialPhotos(draft.data.retCommercialPhotos || {});
       // Recharge le dossier complet depuis la mémoire (évite un brouillon tronqué + données à jour)
       const fdImmat = draft.data.foundDossier?.immat;
       setFoundDossier((fdImmat && dossiers[fdImmat]) || draft.data.foundDossier || null);
@@ -820,8 +815,6 @@ export default function App() {
     setDraftAvailable(null);
   }
   const [depEmailSent,setDepEmailSent]=useState(false);
-  const [commercialPhotos,setCommercialPhotos]=useState({}); // { "av_droit": base64, "ar_gauche": base64 }
-  const [processingPhoto,setProcessingPhoto]=useState(null); // clé en cours de traitement
 
   const [retForm,setRetForm]=useState({date:todayISO(),heures:"",km_porteur:"",agent:"",immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:""});
   const [retTests,setRetTests]=useState({});
@@ -842,11 +835,41 @@ export default function App() {
   const [userForm,setUserForm]=useState({email:"",nom:"",prenom:"",role:"expert"});
   const [editingUser,setEditingUser]=useState(null);
   const [retStep,setRetStep]=useState(0);
-  const [retCommercialPhotos,setRetCommercialPhotos]=useState({});
-  const [retProcessingPhoto,setRetProcessingPhoto]=useState(null);
   const [searchImmat,setSearchImmat]=useState("");
   const [foundDossier,setFoundDossier]=useState(null);
   const [searchDone,setSearchDone]=useState(false);
+  const [venteImmat,setVenteImmat]=useState("");         // onglet Photos de ventes — immat recherchée
+  const [venteSearchDone,setVenteSearchDone]=useState(false);
+
+  // ═══════════════════════════════════════════════════════════
+  // NAVIGATION ARRIÈRE (History API) — le bouton retour du
+  // navigateur recule étape par étape (3→2→1→accueil) au lieu
+  // de quitter l'application.
+  // ═══════════════════════════════════════════════════════════
+  const navFromPop = useRef(false);
+  useEffect(()=>{
+    // Au montage : marque l'entrée d'historique courante comme "accueil"
+    window.history.replaceState({nav:true,view:"home",depStep:0,retStep:0}, "");
+  },[]);
+  useEffect(()=>{
+    // À chaque avancée (vue ou étape), on empile une entrée d'historique
+    if(navFromPop.current){ navFromPop.current=false; return; }
+    const cur = window.history.state;
+    if(cur?.nav && cur.view===view && cur.depStep===depStep && cur.retStep===retStep) return;
+    window.history.pushState({nav:true,view,depStep,retStep}, "");
+  },[view,depStep,retStep]);
+  useEffect(()=>{
+    // Retour navigateur : on restaure l'écran/étape précédent(e)
+    const onPop = (e)=>{
+      const s = (e.state && e.state.nav) ? e.state : {view:"home",depStep:0,retStep:0};
+      navFromPop.current = true;
+      setView(s.view||"home");
+      setDepStep(s.depStep||0);
+      setRetStep(s.retStep||0);
+    };
+    window.addEventListener("popstate", onPop);
+    return ()=>window.removeEventListener("popstate", onPop);
+  },[]);
 
   useEffect(()=>{ loadAll(); },[]);
   
@@ -861,16 +884,16 @@ export default function App() {
   // Auto-save DÉPART (brouillon)
   useEffect(()=>{
     if(view==="depart" && depStep > 0) {
-      saveDraft("depart", { depForm, depZones, depTests, depPhotos, depStep, commercialPhotos });
+      saveDraft("depart", { depForm, depZones, depTests, depPhotos, depStep });
     }
-  },[view, depForm, depZones, depTests, depPhotos, depStep, commercialPhotos]);
+  },[view, depForm, depZones, depTests, depPhotos, depStep]);
 
   // Auto-save RETOUR (brouillon)
   useEffect(()=>{
     if(view==="retour" && retStep >= 1) {
-      saveDraft("retour", { retForm, retZones, retTests, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, searchImmat, emailClient });
+      saveDraft("retour", { retForm, retZones, retTests, retPhotos, retDegats, retNote, retStep, foundDossier, searchImmat, emailClient });
     }
-  },[view, retForm, retZones, retTests, retPhotos, retDegats, retNote, retStep, retCommercialPhotos, foundDossier, emailClient]);
+  },[view, retForm, retZones, retTests, retPhotos, retDegats, retNote, retStep, foundDossier, emailClient]);
 
   // Reprise retour : ré-injecte le dossier départ complet depuis la mémoire
   // (la liste "dossiers" se charge en asynchrone, et un brouillon tronqué ne contient que l'immat).
@@ -1190,7 +1213,7 @@ export default function App() {
         heures:retForm.heures,
         km_porteur:retForm.km_porteur,
         agent:retForm.agent,
-        commercialPhotos:{ ...(foundDossier.retour?.commercialPhotos||{}), ...retCommercialPhotos }, // préserve les photos de ventes ajoutées après coup
+        commercialPhotos:{ ...(foundDossier.retour?.commercialPhotos||{}) }, // préserve les photos de ventes prises via l'onglet dédié
         ...(pdfInfo || {})
       },
       synced_to_delta_vo: false, // Marqueur pour synchronisation avec Delta VO
@@ -1237,7 +1260,7 @@ export default function App() {
     return matchQ && matchStatut;
   });
 
-  function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setCommercialPhotos({});setProcessingPhoto(null);setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient("");setEmailSent(false);setDepEmailSent(false);setDepEmailSending(false);setDepTests({});setRetTests({}); }
+  function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setVenteImmat("");setVenteSearchDone(false);setEmailClient("");setEmailSent(false);setDepEmailSent(false);setDepEmailSending(false);setDepTests({});setRetTests({}); }
 
   // --- Régénération Pro+ d'une photo commerciale sur un dossier déjà terminé (vue rapport) ---
   // Non destructif : on génère un aperçu, et le remplacement n'a lieu qu'après confirmation.
@@ -1417,6 +1440,7 @@ export default function App() {
           )}
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={()=>{setAdminOpen(true);setAdminAuthed(false);setAdminPwd("");}}>⚙</button>
           {view==="home"&&<>
+            <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("ventes");setActiveDossier(null);setVenteImmat("");setVenteSearchDone(false);}}>📷 Photos de ventes</button>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>Expertise Retour</button>
             <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});}}>+ Nouveau départ</button>
           </>}
@@ -1786,7 +1810,7 @@ export default function App() {
                       <button className="btn btn-outline" onClick={()=>{setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>← Annuler</button>
                       <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
                         {!retForm.numero_cube&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Le N° de cube est obligatoire</div>}
-                        <button className="btn btn-gold" disabled={!retForm.numero_cube} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetNote("");setRetCommercialPhotos({});setRetProcessingPhoto(null);setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
+                        <button className="btn btn-gold" disabled={!retForm.numero_cube} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetNote("");setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
                       </div>
                     </div>
                   </div>
@@ -1877,8 +1901,6 @@ export default function App() {
                       setRetPhotos({});
                       setRetDegats([]);
                       setRetNote("");
-                      setRetCommercialPhotos({});
-                      setRetProcessingPhoto(null);
                       setEmailClient(d.info.email);
                       setEmailSent(false);
                       setRetStep(1);
@@ -1931,33 +1953,6 @@ export default function App() {
                                         {retPhoto?(
                                           <div>
                                             <div style={{position:"relative",display:"inline-block"}}><img src={retPhoto.url} alt="" style={{width:"100%",maxWidth:160,height:110,objectFit:"cover",border:"1px solid var(--border2)"}}/><button className="btn btn-danger" onClick={()=>removePhoto(key,0,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:9}}>✕</button></div>
-                                            {COMMERCIAL_ANGLES.includes(angle.key)&&retCommercialPhotos[angle.key]&&(
-                                              <div style={{marginTop:8,padding:"10px",background:"#f0f4ff",border:"1px solid rgba(26,42,110,.2)"}}>
-                                                <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:6,fontWeight:700}}>
-                                                  ✓ Photo commerciale {typeof retCommercialPhotos[angle.key]==="object"&&retCommercialPhotos[angle.key].type==="storage"?"(Storage)":""}
-                                                </div>
-                                                <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                                                  <img 
-                                                    src={typeof retCommercialPhotos[angle.key]==="object" ? retCommercialPhotos[angle.key].url : retCommercialPhotos[angle.key]} 
-                                                    alt="commercial" 
-                                                    style={{width:140,height:80,objectFit:"cover",border:"1px solid var(--border2)"}}
-                                                  />
-                                                  <a 
-                                                    href={typeof retCommercialPhotos[angle.key]==="object" ? retCommercialPhotos[angle.key].url : retCommercialPhotos[angle.key]} 
-                                                    download={`${foundDossier?.immat||"nacelle"}_${angle.label.replace(/ /g,"_")}_commercial.jpg`} 
-                                                    style={{padding:"8px 12px",background:"var(--primary)",color:"#fff",fontSize:11,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",textDecoration:"none",display:"inline-block"}}
-                                                  >
-                                                    ⬇ Télécharger
-                                                  </a>
-                                                </div>
-                                              </div>
-                                            )}
-                                            {COMMERCIAL_ANGLES.includes(angle.key)&&retProcessingPhoto===angle.key&&(
-                                              <div style={{marginTop:8,padding:"10px",background:"#f0f4ff",border:"1px solid rgba(26,42,110,.2)",display:"flex",alignItems:"center",gap:8}}>
-                                                <div style={{display:"flex",gap:4}}>{[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:"var(--primary)",animation:"aiPulse 1.2s ease-in-out infinite",animationDelay:i*0.2+"s"}}/>)}</div>
-                                                <div style={{fontSize:11,color:"var(--primary)"}}>Génération photo commerciale...</div>
-                                              </div>
-                                            )}
                                           </div>
                                         ):(<div className="photo-add" style={{width:120,height:88}} onClick={async()=>{
                                           const f=await pickFile({multiple:false});
@@ -2198,30 +2193,6 @@ export default function App() {
             )}
             {!activeDossier.retour?.degats?.length&&activeDossier.retour&&(<div style={{marginTop:12,padding:"14px 16px",border:"1px solid rgba(48,160,80,.3)",background:"rgba(48,160,80,.06)",color:"#208040",fontSize:13,fontWeight:600}}>✓ Aucun dégât constaté — nacelle rendue conforme</div>)}
             {activeDossier.retour?.note&&<div className="card" style={{marginTop:10}}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:6}}>Notes</div><div style={{fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{activeDossier.retour.note}</div></div>}
-            {activeDossier.retour&&(
-              <div className="card no-print" style={{marginTop:10}}>
-                <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:8}}>Photos de ventes</div>
-                <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>À prendre après l'expertise. Les 2 vues extérieures sont détourées automatiquement (logo + immat), les habitacles restent brutes. Ces 4 photos partent vers Delta VO pour la fiche de ventes.</div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
-                  {VENTE_SLOTS.map(slot=>{
-                    const current=activeDossier.retour?.commercialPhotos?.[slot.key];
-                    const currentUrl=current?(typeof current==="object"?current.url:current):null;
-                    const busy=venteBusy===slot.key;
-                    return (
-                      <div key={slot.key} style={{border:"1px solid var(--border)",padding:8,width:152}}>
-                        <div style={{fontSize:10,fontWeight:600,marginBottom:6}}>{slot.label}{slot.detour&&<span style={{color:"var(--accent)"}}> · Pro+</span>}</div>
-                        {currentUrl?(
-                          <img src={currentUrl} alt="" style={{width:"100%",height:104,objectFit:"contain",background:"#f0f2f5"}}/>
-                        ):(
-                          <div style={{width:"100%",height:104,background:"#f0f2f5",border:"1px dashed var(--border2)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--muted)",fontSize:24}}>+</div>
-                        )}
-                        <button className={currentUrl?"btn btn-outline btn-sm":"btn btn-blue btn-sm"} style={{marginTop:6,width:"100%"}} disabled={busy} onClick={()=>captureVentePhoto(slot)}>{busy?(slot.detour?"Détourage…":"Envoi…"):(currentUrl?"↻ Reprendre":"📷 Prendre")}</button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
             <div style={{marginTop:6,padding:"10px 14px",background:"#f8f9fb",border:"1px solid var(--border)",fontSize:11,color:"var(--muted)",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
               <span>DELTA SERVICES / 14 Avenue James de Rothschild / 77164 Ferrières-en-Brie · Tel. +33 (0)1 60 95 47 80 · Siret : 512 252 792 00050</span>
               <span style={{fontWeight:600,color:"var(--primary)"}}>© {new Date().getFullYear()} Delta Services · Tous droits réservés</span>
@@ -2235,6 +2206,67 @@ export default function App() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* PHOTOS DE VENTES — onglet dédié, lien par immatriculation */}
+        {view==="ventes"&&(
+          <div className="fade-in">
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div className="section-title" style={{marginBottom:0}}>Photos de ventes</div>
+              <button className="btn btn-outline btn-sm no-print" onClick={goHome}>← Accueil</button>
+            </div>
+            <div className="card" style={{marginBottom:14}}>
+              <label>Immatriculation nacelle</label>
+              <div style={{display:"flex",gap:8}}>
+                <input value={venteImmat} onChange={e=>{setVenteImmat(e.target.value.toUpperCase());setVenteSearchDone(false);}} placeholder="AB-123-CD" style={{flex:1}} onKeyDown={e=>{if(e.key==="Enter"){setActiveDossier(dossiers[venteImmat]||null);setVenteSearchDone(true);}}}/>
+                <button className="btn btn-gold" onClick={()=>{setActiveDossier(dossiers[venteImmat]||null);setVenteSearchDone(true);}}>Rechercher</button>
+              </div>
+            </div>
+            {venteSearchDone&&!activeDossier&&(
+              <div style={{color:"var(--accent)",fontSize:13,padding:"10px 14px",border:"1px solid rgba(200,16,46,.3)",background:"rgba(200,16,46,.06)",marginBottom:14}}>
+                Aucun dossier pour « {venteImmat} »
+              </div>
+            )}
+            {venteSearchDone&&activeDossier&&!activeDossier.retour&&(
+              <div style={{color:"var(--accent)",fontSize:13,padding:"10px 14px",border:"1px solid rgba(200,16,46,.3)",background:"rgba(200,16,46,.06)",marginBottom:14}}>
+                ⚠ L'expertise retour de « {activeDossier.immat} » n'a pas encore été réalisée. Les photos de ventes se prennent après l'expertise.
+              </div>
+            )}
+            {venteSearchDone&&activeDossier&&activeDossier.retour&&(
+              <div>
+                <div className="card" style={{marginBottom:14,border:"2px solid var(--primary)"}}>
+                  <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:10,fontWeight:700}}>Dossier trouvé</div>
+                  <div className="g3">
+                    {[["Immatriculation",activeDossier.immat],["Type nacelle",activeDossier.info?.type_nacelle],["Modèle porteur",activeDossier.info?.modele],["Client",activeDossier.info?.client],["Contrat",activeDossier.info?.contrat],["Date retour",activeDossier.retour?.date]].map(([k,v])=>(
+                      <div key={k}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
+                    ))}
+                  </div>
+                </div>
+                <div className="card">
+                  <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:8}}>Photos de ventes</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>Les 2 vues extérieures sont détourées automatiquement (logo + immat), les habitacles restent brutes. Ces 4 photos partent vers Delta VO pour la fiche de ventes.</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
+                    {VENTE_SLOTS.map(slot=>{
+                      const current=activeDossier.retour?.commercialPhotos?.[slot.key];
+                      const currentUrl=current?(typeof current==="object"?current.url:current):null;
+                      const busy=venteBusy===slot.key;
+                      return (
+                        <div key={slot.key} style={{border:"1px solid var(--border)",padding:8,width:152}}>
+                          <div style={{fontSize:10,fontWeight:600,marginBottom:6}}>{slot.label}{slot.detour&&<span style={{color:"var(--accent)"}}> · Pro+</span>}</div>
+                          {currentUrl?(
+                            <img src={currentUrl} alt="" style={{width:"100%",height:104,objectFit:"contain",background:"#f0f2f5"}}/>
+                          ):(
+                            <div style={{width:"100%",height:104,background:"#f0f2f5",border:"1px dashed var(--border2)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--muted)",fontSize:24}}>+</div>
+                          )}
+                          <button className={currentUrl?"btn btn-outline btn-sm":"btn btn-blue btn-sm"} style={{marginTop:6,width:"100%"}} disabled={busy} onClick={()=>captureVentePhoto(slot)}>{busy?(slot.detour?"Détourage…":"Envoi…"):(currentUrl?"↻ Reprendre":"📷 Prendre")}</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
