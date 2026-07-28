@@ -365,13 +365,59 @@ const genId = () => Math.random().toString(36).slice(2,9).toUpperCase();
 const todayISO = () => new Date().toISOString().slice(0,10);
 
 function photoToBase64(file) {
-  return new Promise((res,rej) => { const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
+  return new Promise((res,rej) => { const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(new Error("Lecture du fichier impossible")); r.readAsDataURL(file); });
 }
+// Référence globale pour empêcher le garbage collection de l'input file
+// pendant que le sélecteur de photos est ouvert (bug iOS/Android : sans ça,
+// onchange ne se déclenche parfois jamais quand on sélectionne plusieurs photos).
+let _activeFileInput = null;
 function pickFile(opts={}) {
-  return new Promise(res => { const inp=document.createElement("input"); inp.type="file"; inp.accept=opts.accept||"image/*"; inp.multiple=opts.multiple||false; inp.onchange=()=>res(inp.files); inp.click(); });
+  return new Promise(res => {
+    const inp=document.createElement("input");
+    inp.type="file"; inp.accept=opts.accept||"image/*"; inp.multiple=opts.multiple||false;
+    inp.style.position="fixed"; inp.style.top="-1000px"; inp.style.left="-1000px"; inp.style.opacity="0";
+    document.body.appendChild(inp);
+    _activeFileInput = inp;
+    const cleanup = () => { try { document.body.removeChild(inp); } catch(e){} if(_activeFileInput===inp) _activeFileInput=null; };
+    inp.onchange=()=>{ const files=inp.files; cleanup(); res(files && files.length ? files : null); };
+    // Annulation du sélecteur (l'événement "cancel" est supporté par les navigateurs récents)
+    inp.addEventListener("cancel", ()=>{ cleanup(); res(null); });
+    inp.click();
+  });
 }
 async function compressBase64(base64,maxW=800,quality=0.7) {
-  return new Promise(res => { const img=new Image(); img.onload=()=>{ const c=document.createElement("canvas"); const r=Math.min(maxW/img.width,maxW/img.height,1); c.width=img.width*r; c.height=img.height*r; c.getContext("2d").drawImage(img,0,0,c.width,c.height); res(c.toDataURL("image/jpeg",quality)); }; img.src=base64; });
+  return new Promise(res => {
+    try {
+      const img=new Image();
+      img.onload=()=>{
+        try {
+          const c=document.createElement("canvas");
+          const r=Math.min(maxW/img.width,maxW/img.height,1);
+          c.width=img.width*r; c.height=img.height*r;
+          c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+          res(c.toDataURL("image/jpeg",quality));
+        } catch(e) {
+          console.error("Compression échouée, image originale conservée:", e);
+          res(base64); // fallback : on garde l'originale plutôt que de bloquer
+        }
+      };
+      // CRUCIAL : sans onerror, une image non décodable (HEIC, fichier corrompu...)
+      // laissait la promesse en attente pour toujours → file d'upload gelée,
+      // bandeau "envoi en cours" permanent et ajout de photos bloqué partout.
+      img.onerror=()=>{
+        console.error("Image non décodable par le navigateur");
+        res(null);
+      };
+      img.src=base64;
+    } catch(e) { console.error("compressBase64:", e); res(null); }
+  });
+}
+// Garde-fou : rejette si une étape d'upload dépasse le délai (réseau coupé, requête gelée...)
+function withTimeout(promise, ms, label="opération") {
+  return Promise.race([
+    promise,
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error(`Délai dépassé (${label})`)), ms))
+  ]);
 }
 async function removeBackground(base64) {
   try {
@@ -803,6 +849,7 @@ export default function App() {
       setRetTests(draft.data.retTests || {});
       setRetPhotos(draft.data.retPhotos || {});
       setRetDegats(draft.data.retDegats || []);
+      setRetQtes(draft.data.retQtes || {});
       setRetNote(draft.data.retNote || "");
       setRetStep(draft.data.retStep || 1);
       // Recharge le dossier complet depuis la mémoire (évite un brouillon tronqué + données à jour)
@@ -821,6 +868,9 @@ export default function App() {
   const [retZones,setRetZones]=useState({});
   const [retPhotos,setRetPhotos]=useState({});
   const [retDegats,setRetDegats]=useState([]);
+  const [retQtes,setRetQtes]=useState({}); // { tarifId: quantité } — 1 par défaut
+  const [triPhoto,setTriPhoto]=useState(null);   // index de la photo "à trier" en cours d'affectation
+  const [triFilter,setTriFilter]=useState("");   // recherche dans la liste d'affectation
   const [retNote,setRetNote]=useState("");
   const [emailClient,setEmailClient]=useState("");
   const [emailSending,setEmailSending]=useState(false);
@@ -891,9 +941,9 @@ export default function App() {
   // Auto-save RETOUR (brouillon)
   useEffect(()=>{
     if(view==="retour" && retStep >= 1) {
-      saveDraft("retour", { retForm, retZones, retTests, retPhotos, retDegats, retNote, retStep, foundDossier, searchImmat, emailClient });
+      saveDraft("retour", { retForm, retZones, retTests, retPhotos, retDegats, retQtes, retNote, retStep, foundDossier, searchImmat, emailClient });
     }
-  },[view, retForm, retZones, retTests, retPhotos, retDegats, retNote, retStep, foundDossier, emailClient]);
+  },[view, retForm, retZones, retTests, retPhotos, retDegats, retQtes, retNote, retStep, foundDossier, emailClient]);
 
   // Reprise retour : ré-injecte le dossier départ complet depuis la mémoire
   // (la liste "dossiers" se charge en asynchrone, et un brouillon tronqué ne contient que l'immat).
@@ -1138,32 +1188,74 @@ export default function App() {
     const { type, immat } = uploadContext(zoneId);
     // Compresser avant upload (max 1600px, qualité 0.82) — garde une bonne qualité commerciale
     const base64Original = await photoToBase64(file);
-    const compressed = await compressBase64(base64Original, 1600, 0.82);
+    let compressed = await compressBase64(base64Original, 1600, 0.82);
+    if (!compressed) {
+      // Image non décodable par le navigateur (ex: HEIC) → on tente l'upload de l'originale
+      // si c'est un format d'image standard, sinon on abandonne proprement CETTE photo
+      // sans bloquer les suivantes.
+      if (/^data:image\/(jpeg|jpg|png|webp|gif)/i.test(base64Original)) {
+        compressed = base64Original;
+      } else {
+        throw new Error(`Format non pris en charge (${file.name}). Utilisez JPEG ou PNG.`);
+      }
+    }
     const timestamp = Date.now();
     const rand = Math.random().toString(36).slice(2, 8);
     const storagePath = `dossiers/${immat}/${type}/${zoneId}/${timestamp}_${rand}.jpg`;
     const storageRef = ref(storage, storagePath);
-    await uploadString(storageRef, compressed, "data_url");
-    const url = await getDownloadURL(storageRef);
+    await withTimeout(uploadString(storageRef, compressed, "data_url"), 90000, "envoi de " + file.name);
+    const url = await withTimeout(getDownloadURL(storageRef), 30000, "récupération URL");
     return { name: file.name, url, path: storagePath };
   }
 
   async function addPhotos(files, zoneId, setter) {
-    const arr = Array.from(files);
+    const arr = Array.from(files || []);
+    if (!arr.length) return;
     setUploadingCount(n => n + arr.length);
+    const failed = [];
     for (const f of arr) {
       try {
         const photo = await uploadPhotoToStorage(f, zoneId);
         setter(prev => ({ ...prev, [zoneId]: [...(prev[zoneId] || []), photo] }));
       } catch (e) {
-        console.error("Erreur upload photo:", e);
-        alert("Erreur lors de l'envoi de la photo : " + e.message);
+        console.error("Erreur upload photo:", f?.name, e);
+        failed.push(`${f?.name || "photo"} — ${e.message}`);
       } finally {
+        // Toujours décrémenter, même en cas d'échec : le compteur ne peut plus rester bloqué
         setUploadingCount(n => Math.max(0, n - 1));
       }
     }
+    // Une seule alerte récapitulative à la fin (les alertes en boucle bloquaient la file)
+    if (failed.length) {
+      alert(`${failed.length} photo${failed.length>1?"s n'ont":" n'a"} pas pu être envoyée${failed.length>1?"s":""} :\n\n${failed.join("\n")}\n\nLes autres photos ont bien été ajoutées. Vous pouvez réessayer.`);
+    }
   }
   function removePhoto(zoneId,idx,setter) { setter(prev=>({...prev,[zoneId]:prev[zoneId].filter((_,i)=>i!==idx)})); }
+
+  // ─── Tri des photos importées en lot (expertise retour) ───
+  // Déplace une photo du bac "a_trier" vers une section, un angle du tour ou un dégât.
+  // Si c'est un dégât, il est coché automatiquement (quantité 1 par défaut).
+  function assignPendingPhoto(idx, targetKey, degatId) {
+    setRetPhotos(prev=>{
+      const pool=[...(prev["a_trier"]||[])];
+      const photo=pool.splice(idx,1)[0];
+      if(!photo) return prev;
+      return {...prev, a_trier:pool, [targetKey]:[...(prev[targetKey]||[]), photo]};
+    });
+    if(degatId){
+      setRetDegats(prev=>prev.includes(degatId)?prev:[...prev,degatId]);
+      setRetQtes(prev=>prev[degatId]?prev:{...prev,[degatId]:1});
+    }
+    setTriPhoto(null); setTriFilter("");
+  }
+  // À la validation de l'étape 1 : les photos restées non triées partent en "Photos supplémentaires"
+  function flushPendingPhotos() {
+    setRetPhotos(prev=>{
+      const pool=prev["a_trier"]||[];
+      if(!pool.length) return prev;
+      return {...prev, a_trier:[], photos_supplementaires:[...(prev["photos_supplementaires"]||[]), ...pool]};
+    });
+  }
   function setZE(setter,zoneId,etat) { setter(prev=>({...prev,[zoneId]:{...(prev[zoneId]||{}),etat}})); }
   function setZN(setter,zoneId,note) { setter(prev=>({...prev,[zoneId]:{...(prev[zoneId]||{}),note}})); }
 
@@ -1205,9 +1297,11 @@ export default function App() {
       info:{...foundDossier.info, numero_cube: retForm.numero_cube || foundDossier.info?.numero_cube || ""},
       retour:{
         zones:retZones,
-        photos:retPhotos,
+        // Sécurité : les photos encore "à trier" partent en photos supplémentaires plutôt que d'être perdues
+        photos:(()=>{ const {a_trier,...rest}=retPhotos; return a_trier?.length ? {...rest, photos_supplementaires:[...(rest.photos_supplementaires||[]),...a_trier]} : rest; })(),
         tests:retTests,
         degats:retDegats,
+        quantites:retQtes,
         note:retNote,
         date:retForm.date,
         heures:retForm.heures,
@@ -1253,7 +1347,7 @@ export default function App() {
   function flash(msg) { setAdminMsg(msg); setTimeout(()=>setAdminMsg(""),2500); }
 
   const vetusteTaux = foundDossier ? getVetuste(foundDossier.info?.annee_fab) : 0;
-  const totalRetenue = retDegats.reduce((s,id)=>{ const t=tarifs.find(t=>t.id===id); if(!t||t.surDevis||!t.prix) return s; return s+prixAvecVetuste(t.prix,vetusteTaux); },0);
+  const totalRetenue = retDegats.reduce((s,id)=>{ const t=tarifs.find(t=>t.id===id); if(!t||t.surDevis||!t.prix) return s; return s+prixAvecVetuste(t.prix,vetusteTaux)*(retQtes[id]||1); },0);
   const filteredDossiers = Object.values(dossiers).filter(d=>{
     const matchQ = !searchQ||[d.immat,d.info?.client,d.info?.contrat].some(v=>v?.toLowerCase?.().includes(searchQ.toLowerCase()));
     const matchStatut = filterStatut==="tous" || (filterStatut==="retour"&&d.retour) || (filterStatut==="location"&&!d.retour&&!d.depart?.sansDossier) || (filterStatut==="sans_depart"&&d.depart?.sansDossier&&!d.retour);
@@ -1495,7 +1589,7 @@ export default function App() {
                   const tous=Object.values(dossiers);
                   const avecRetour=tous.filter(d=>d.retour);
                   const tousDegatIds=avecRetour.flatMap(d=>d.retour?.degats||[]);
-                  const montants=avecRetour.map(d=>{const vt=getVetuste(d.info?.annee_fab);return (d.retour?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix)return s;return s+prixAvecVetuste(t.prix,vt);},0);});
+                  const montants=avecRetour.map(d=>{const vt=getVetuste(d.info?.annee_fab);return (d.retour?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix)return s;return s+prixAvecVetuste(t.prix,vt)*(d.retour?.quantites?.[id]||1);},0);});
                   const totalGlobal=montants.reduce((s,m)=>s+m,0);
                   const moyenneRetenue=avecRetour.length?Math.round(totalGlobal/avecRetour.length):0;
                   const freqDegats=tousDegatIds.reduce((acc,id)=>{acc[id]=(acc[id]||0)+1;return acc;},{});
@@ -1688,6 +1782,28 @@ export default function App() {
                     )}
                   </div>
                 ))}
+                <div className="zone-row" style={{marginTop:10}}>
+                  <div className="zone-header" onClick={()=>setOpenZone(openZone==="photos_supplementaires"?null:"photos_supplementaires")}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{color:"var(--primary)",fontSize:18,width:24}}>🖼</span>
+                      <span style={{fontWeight:600}}>Photos supplémentaires</span>
+                      <span style={{fontSize:11,color:"var(--muted)"}}>— hors sections</span>
+                    </div>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      {(depPhotos["photos_supplementaires"]||[]).length>0&&<span className="badge badge-ok">{depPhotos["photos_supplementaires"].length} photo{depPhotos["photos_supplementaires"].length>1?"s":""}</span>}
+                      <span style={{color:"var(--muted)"}}>{openZone==="photos_supplementaires"?"▲":"▼"}</span>
+                    </div>
+                  </div>
+                  {openZone==="photos_supplementaires"&&(
+                    <div className="zone-body">
+                      <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>Ajoutez ici toute photo qui ne concerne pas les sections ci-dessus. Vous pouvez en sélectionner plusieurs d'un coup.</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                        {(depPhotos["photos_supplementaires"]||[]).map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn btn-danger" onClick={()=>removePhoto("photos_supplementaires",i,setDepPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
+                        <div className="photo-add" onClick={async()=>{const f=await pickFile({multiple:true});if(f) addPhotos(f,"photos_supplementaires",setDepPhotos);}}>+</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <div style={{display:"flex",justifyContent:"space-between",marginTop:14}}>
                   <button className="btn btn-outline" onClick={()=>setDepStep(0)}>← Retour</button>
                   <button className="btn btn-gold" onClick={()=>setDepStep(2)}>Prévisualiser →</button>
@@ -1737,6 +1853,16 @@ export default function App() {
                     </div>
                   );
                 })}
+                {(depPhotos["photos_supplementaires"]||[]).length>0&&(
+                  <div style={{marginBottom:5,border:"1px solid var(--border)",padding:"10px 14px",background:"#fff"}}>
+                    <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                      <span style={{color:"var(--primary)"}}>🖼</span>
+                      <span style={{fontWeight:600}}>Photos supplémentaires</span>
+                      <span className="badge badge-ok">{depPhotos["photos_supplementaires"].length} photo{depPhotos["photos_supplementaires"].length>1?"s":""}</span>
+                    </div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:8}}>{depPhotos["photos_supplementaires"].map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>
+                  </div>
+                )}
                 <div className="card no-print" style={{marginTop:14}}>
                   <label>Email client — pour envoi de l'état de départ</label>
                   <input type="email" value={depForm.email} onChange={e=>setDepForm({...depForm,email:e.target.value})} placeholder="client@email.com" style={{marginBottom:8}}/>
@@ -1810,7 +1936,7 @@ export default function App() {
                       <button className="btn btn-outline" onClick={()=>{setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>← Annuler</button>
                       <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
                         {!retForm.numero_cube&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Le N° de cube est obligatoire</div>}
-                        <button className="btn btn-gold" disabled={!retForm.numero_cube} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetNote("");setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
+                        <button className="btn btn-gold" disabled={!retForm.numero_cube} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetQtes({});setRetNote("");setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
                       </div>
                     </div>
                   </div>
@@ -1899,7 +2025,7 @@ export default function App() {
                       setRetZones({});
                       setRetTests({});
                       setRetPhotos({});
-                      setRetDegats([]);
+                      setRetDegats([]);setRetQtes({});
                       setRetNote("");
                       setEmailClient(d.info.email);
                       setEmailSent(false);
@@ -1915,6 +2041,85 @@ export default function App() {
             {retStep===1&&foundDossier&&(
               <div>
                 <div className="section-title">État retour — zone par zone</div>
+
+                {/* ═══ IMPORT EN LOT + TRI DES PHOTOS ═══ */}
+                <div className="card" style={{marginBottom:14,border:"2px dashed var(--border2)",background:"#f8f9fb"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                    <div>
+                      <div style={{fontSize:11,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",fontWeight:700}}>📥 Import de photos en lot</div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Importez toutes vos photos d'un coup, puis touchez chaque photo pour l'affecter à une section ou un dégât.</div>
+                    </div>
+                    <button className="btn btn-gold btn-sm" onClick={async()=>{const f=await pickFile({multiple:true});if(f) addPhotos(f,"a_trier",setRetPhotos);}}>+ Importer des photos</button>
+                  </div>
+                  {(retPhotos["a_trier"]||[]).length>0&&(
+                    <div style={{marginTop:12}}>
+                      <div style={{fontSize:10,letterSpacing:1.5,color:"var(--accent)",textTransform:"uppercase",fontWeight:700,marginBottom:8}}>{retPhotos["a_trier"].length} photo{retPhotos["a_trier"].length>1?"s":""} à trier — touchez une photo pour l'affecter</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                        {retPhotos["a_trier"].map((p,i)=>(
+                          <div key={i} style={{position:"relative",cursor:"pointer",border:"2px solid var(--accent)"}} onClick={()=>{setTriPhoto(i);setTriFilter("");}}>
+                            <img src={p.url} alt="" style={{width:100,height:74,objectFit:"cover",display:"block"}}/>
+                            <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(200,16,46,.85)",color:"#fff",fontSize:9,textAlign:"center",padding:"2px 0",letterSpacing:1,fontWeight:700}}>AFFECTER →</div>
+                            <button className="btn btn-danger" onClick={(e)=>{e.stopPropagation();removePhoto("a_trier",i,setRetPhotos);}} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:9}}>✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal d'affectation d'une photo à trier */}
+                {triPhoto!==null&&(retPhotos["a_trier"]||[])[triPhoto]&&(
+                  <div className="modal-overlay" onClick={()=>{setTriPhoto(null);setTriFilter("");}}>
+                    <div className="modal" onClick={e=>e.stopPropagation()}>
+                      <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:14}}>
+                        <img src={retPhotos["a_trier"][triPhoto].url} alt="" style={{width:110,height:80,objectFit:"cover",border:"1px solid var(--border2)",flexShrink:0}}/>
+                        <div>
+                          <div style={{fontSize:12,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",fontWeight:700}}>Affecter cette photo</div>
+                          <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Choisissez une section, un angle ou un dégât. Un dégât sera coché automatiquement.</div>
+                        </div>
+                      </div>
+                      <input value={triFilter} onChange={e=>setTriFilter(e.target.value)} placeholder="🔍 Rechercher (ex: gyro, bac, phare...)" style={{marginBottom:10}}/>
+                      <div style={{maxHeight:"46vh",overflowY:"auto"}}>
+                        {"photos supplémentaires".includes(triFilter.toLowerCase())&&(
+                          <div className="tarif-row" onClick={()=>assignPendingPhoto(triPhoto,"photos_supplementaires")}>
+                            <span style={{fontSize:13}}>🖼 Photos supplémentaires <span style={{color:"var(--muted)",fontSize:11}}>(hors sections)</span></span>
+                          </div>
+                        )}
+                        {TOUR_ANGLES.filter(a=>!retPhotos[`tour_complet_${a.key}`]?.[0]&&(`tour complet ${a.label}`.toLowerCase().includes(triFilter.toLowerCase()))).map(a=>(
+                          <div key={a.key} className="tarif-row" onClick={()=>assignPendingPhoto(triPhoto,`tour_complet_${a.key}`)}>
+                            <span style={{fontSize:13}}>📷 Tour complet — {a.label}</span>
+                          </div>
+                        ))}
+                        {zones.filter(z=>z.id!=="tour_complet").map(z=>{
+                          const zoneTarifs=tarifs.filter(t=>t.zone===z.id);
+                          const zMatch=z.label.toLowerCase().includes(triFilter.toLowerCase());
+                          const tMatch=zoneTarifs.filter(t=>t.label.toLowerCase().includes(triFilter.toLowerCase()));
+                          if(triFilter&&!zMatch&&!tMatch.length) return null;
+                          return (
+                            <div key={z.id} style={{marginBottom:6}}>
+                              <div style={{fontSize:10,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",fontWeight:700,padding:"6px 2px 3px"}}>{z.icon} {z.label}</div>
+                              {(!triFilter||zMatch)&&(
+                                <div className="tarif-row" onClick={()=>assignPendingPhoto(triPhoto,z.id)}>
+                                  <span style={{fontSize:13}}>Photo générale de la section</span>
+                                </div>
+                              )}
+                              {(triFilter?tMatch:zoneTarifs).map(t=>(
+                                <div key={t.id} className={`tarif-row ${retDegats.includes(t.id)?"active":""}`} onClick={()=>assignPendingPhoto(triPhoto,`degat_${t.id}`,t.id)}>
+                                  <span style={{fontSize:13}}>⚠ {t.label}{retDegats.includes(t.id)&&<span style={{marginLeft:6,fontSize:10,color:"var(--primary)",fontWeight:700}}>déjà coché</span>}</span>
+                                  <span className="mono" style={{fontSize:11,color:"var(--primary)",fontWeight:700,whiteSpace:"nowrap"}}>{t.surDevis?"SUR DEVIS":prixAvecVetuste(t.prix,vetusteTaux)+" €"}</span>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div style={{display:"flex",justifyContent:"flex-end",marginTop:12}}>
+                        <button className="btn btn-outline btn-sm" onClick={()=>{setTriPhoto(null);setTriFilter("");}}>Annuler</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <TestNacelle tests={retTests} onChange={setRetTests} />
                 {vetusteTaux!==0&&<div style={{padding:"8px 14px",background:"rgba(200,16,46,.06)",border:"1px solid rgba(200,16,46,.2)",fontSize:12,color:"var(--accent)",marginBottom:10,fontWeight:600}}>⚖ Taux de vétusté appliqué : {vetusteTaux}% sur les prix</div>}
                 {zones.map(zone=>{
@@ -1996,22 +2201,29 @@ export default function App() {
                                     const dphotos=retPhotos[pkey]||[];
                                     return (
                                     <div key={t.id} style={{marginBottom:3}}>
-                                      <div className={`tarif-row ${checked?"active":""}`} style={{marginBottom:0}} onClick={()=>setRetDegats(prev=>prev.includes(t.id)?prev.filter(d=>d!==t.id):[...prev,t.id])}>
+                                      <div className={`tarif-row ${checked?"active":""}`} style={{marginBottom:0}} onClick={()=>{const wasChecked=retDegats.includes(t.id);setRetDegats(prev=>wasChecked?prev.filter(d=>d!==t.id):[...prev,t.id]);setRetQtes(prev=>{const n={...prev};if(wasChecked){delete n[t.id];}else{n[t.id]=1;}return n;});}}>
                                         <div style={{display:"flex",alignItems:"center",gap:10}}>
                                           <div style={{width:16,height:16,border:`2px solid ${checked?"var(--primary)":"var(--border2)"}`,background:checked?"var(--primary)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",flexShrink:0}}>{checked?"✓":""}</div>
-                                          <span style={{fontSize:13}}>{t.label}</span>
+                                          <span style={{fontSize:13}}>{t.label}{checked&&(retQtes[t.id]||1)>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {retQtes[t.id]}</span>}</span>
                                         </div>
                                         {t.surDevis?(
                                           <span style={{fontSize:11,color:"var(--accent)",fontWeight:700,fontFamily:"monospace",whiteSpace:"nowrap"}}>SUR DEVIS</span>
                                         ):(
                                           <div style={{textAlign:"right",flexShrink:0}}>
-                                            <div className="mono" style={{color:"var(--primary)",fontSize:13,fontWeight:700}}>{prixAvecVetuste(t.prix,vetusteTaux)} €</div>
+                                            <div className="mono" style={{color:"var(--primary)",fontSize:13,fontWeight:700}}>{checked&&(retQtes[t.id]||1)>1?(prixAvecVetuste(t.prix,vetusteTaux)*(retQtes[t.id]||1)).toLocaleString("fr-FR"):prixAvecVetuste(t.prix,vetusteTaux)} €</div>
+                                            {checked&&(retQtes[t.id]||1)>1&&<div style={{fontSize:9,color:"var(--muted)"}}>{retQtes[t.id]} × {prixAvecVetuste(t.prix,vetusteTaux)} €</div>}
                                             {vetusteTaux!==0&&<div style={{fontSize:9,color:"var(--muted)"}}>{t.prix}€ {vetusteTaux}%</div>}
                                           </div>
                                         )}
                                       </div>
                                       {checked&&(
                                         <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",padding:"8px 12px",border:"1px solid var(--primary)",borderTop:"none",background:"rgba(26,42,110,.03)"}} onClick={e=>e.stopPropagation()}>
+                                          <span style={{fontSize:10,letterSpacing:1.5,color:"var(--muted)",textTransform:"uppercase"}}>Qté</span>
+                                          <div style={{display:"flex",alignItems:"center",border:"1px solid var(--border2)",background:"#fff",marginRight:10}}>
+                                            <button type="button" style={{border:"none",background:"transparent",color:"var(--primary)",padding:"6px 14px",fontSize:16,fontWeight:700,cursor:"pointer",lineHeight:1}} onClick={(e)=>{e.stopPropagation();setRetQtes(prev=>({...prev,[t.id]:Math.max(1,(prev[t.id]||1)-1)}));}}>−</button>
+                                            <span className="mono" style={{minWidth:30,textAlign:"center",fontSize:14,fontWeight:700,color:"var(--primary)"}}>{retQtes[t.id]||1}</span>
+                                            <button type="button" style={{border:"none",background:"transparent",color:"var(--primary)",padding:"6px 14px",fontSize:16,fontWeight:700,cursor:"pointer",lineHeight:1}} onClick={(e)=>{e.stopPropagation();setRetQtes(prev=>({...prev,[t.id]:Math.min(99,(prev[t.id]||1)+1)}));}}>+</button>
+                                          </div>
                                           <span style={{fontSize:10,letterSpacing:1.5,color:"var(--muted)",textTransform:"uppercase",marginRight:4}}>Photos du dégât</span>
                                           {dphotos.map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn btn-danger" onClick={(e)=>{e.stopPropagation();removePhoto(pkey,i,setRetPhotos);}} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
                                           <div className="photo-add" style={{width:64,height:48,fontSize:20}} onClick={async(e)=>{e.stopPropagation();const f=await pickFile({multiple:true});if(f) addPhotos(f,pkey,setRetPhotos);}}>+</div>
@@ -2029,6 +2241,28 @@ export default function App() {
                     </div>
                   );
                 })}
+                <div className="zone-row" style={{marginTop:10}}>
+                  <div className="zone-header" onClick={()=>setOpenZone(openZone==="photos_supplementaires"?null:"photos_supplementaires")}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{color:"var(--primary)",fontSize:18,width:24}}>🖼</span>
+                      <span style={{fontWeight:600}}>Photos supplémentaires</span>
+                      <span style={{fontSize:11,color:"var(--muted)"}}>— hors sections</span>
+                    </div>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      {(retPhotos["photos_supplementaires"]||[]).length>0&&<span className="badge badge-ok">{retPhotos["photos_supplementaires"].length} photo{retPhotos["photos_supplementaires"].length>1?"s":""}</span>}
+                      <span style={{color:"var(--muted)"}}>{openZone==="photos_supplementaires"?"▲":"▼"}</span>
+                    </div>
+                  </div>
+                  {openZone==="photos_supplementaires"&&(
+                    <div className="zone-body">
+                      <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>Ajoutez ici toute photo qui ne concerne pas les sections ci-dessus. Vous pouvez en sélectionner plusieurs d'un coup.</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                        {(retPhotos["photos_supplementaires"]||[]).map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn btn-danger" onClick={()=>removePhoto("photos_supplementaires",i,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
+                        <div className="photo-add" onClick={async()=>{const f=await pickFile({multiple:true});if(f) addPhotos(f,"photos_supplementaires",setRetPhotos);}}>+</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 {retDegats.length>0&&(
                   <div className="total-strip" style={{marginTop:14}}>
                     <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>Total retenue · {retDegats.length} poste{retDegats.length>1?"s":""}</span>
@@ -2037,7 +2271,14 @@ export default function App() {
                 )}
                 <div style={{display:"flex",justifyContent:"space-between",marginTop:14}}>
                   <button className="btn btn-outline" onClick={()=>setRetStep(0)}>← Retour</button>
-                  <button className="btn btn-gold" onClick={()=>setRetStep(2)}>Valider l'expertise →</button>
+                  <button className="btn btn-gold" onClick={()=>{
+                    const pending=(retPhotos["a_trier"]||[]).length;
+                    if(pending>0){
+                      if(!window.confirm(`${pending} photo${pending>1?"s":""} importée${pending>1?"s":""} n'${pending>1?"ont":"a"} pas été triée${pending>1?"s":""}.\n\nOK → elle${pending>1?"s":""} sera${pending>1?"ont":""} ajoutée${pending>1?"s":""} aux « Photos supplémentaires »\nAnnuler → revenir pour les trier`)) return;
+                      flushPendingPhotos();
+                    }
+                    setRetStep(2);
+                  }}>Valider l'expertise →</button>
                 </div>
               </div>
             )}
@@ -2055,7 +2296,7 @@ export default function App() {
                   {retDegats.length>0?(
                     <div>
                       <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,fontWeight:700}}>Dégâts retenus</div>
-                      {retDegats.map(id=>{const t=tarifs.find(t=>t.id===id);const dphotos=retPhotos[`degat_${id}`]||[];return t?(<div key={id} style={{padding:"7px 0",borderBottom:"1px solid var(--border)"}}><div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span>{t.label}</span><span className="mono" style={{color:"var(--primary)",fontWeight:700}}>{t.surDevis?"SUR DEVIS":prixAvecVetuste(t.prix,vetusteTaux)+" €"}</span></div>{dphotos.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>{dphotos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>}</div>):null;})}
+                      {retDegats.map(id=>{const t=tarifs.find(t=>t.id===id);const dphotos=retPhotos[`degat_${id}`]||[];const q=retQtes[id]||1;return t?(<div key={id} style={{padding:"7px 0",borderBottom:"1px solid var(--border)"}}><div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span>{t.label}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span><span className="mono" style={{color:"var(--primary)",fontWeight:700}}>{t.surDevis?"SUR DEVIS":(q>1?`${q} × ${prixAvecVetuste(t.prix,vetusteTaux)} € = ${(prixAvecVetuste(t.prix,vetusteTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vetusteTaux)+" €")}</span></div>{dphotos.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>{dphotos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>}</div>):null;})}
                       {vetusteTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Taux de vétusté appliqué : {vetusteTaux}%</div>}
                       <div className="total-strip" style={{marginTop:10}}>
                         <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>TOTAL RETENUE HT</span>
@@ -2065,6 +2306,12 @@ export default function App() {
                   ):(<div style={{padding:"12px 0",color:"#208040",fontWeight:600}}>✓ Aucun dégât — nacelle rendue conforme</div>)}
                 </div>
                 <div className="card" style={{marginBottom:14}}>
+                  {(retPhotos["photos_supplementaires"]||[]).length>0&&(
+                    <div style={{marginBottom:14}}>
+                      <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,fontWeight:700}}>Photos supplémentaires</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{retPhotos["photos_supplementaires"].map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>
+                    </div>
+                  )}
                   <label>Notes / observations complémentaires</label>
                   <textarea value={retNote} onChange={e=>setRetNote(e.target.value)} rows={3} placeholder="Réserves, observations..." style={{resize:"vertical"}}/>
                 </div>
@@ -2164,6 +2411,27 @@ export default function App() {
                 </div>
               );
             })}
+            {(()=>{
+              const depSup=activeDossier.depart?.photos?.["photos_supplementaires"]||[];
+              const retSup=activeDossier.retour?.photos?.["photos_supplementaires"]||[];
+              if(!depSup.length&&!retSup.length) return null;
+              return (
+                <div style={{marginBottom:5,border:"1px solid var(--border)",overflow:"hidden"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 14px",background:"#f8f9fb"}}>
+                    <span style={{color:"var(--primary)"}}>🖼</span>
+                    <span style={{fontWeight:600,fontSize:14}}>Photos supplémentaires</span>
+                  </div>
+                  <div style={{display:"flex",gap:2}}>
+                    {[{label:"DÉPART",photos:depSup},{label:"RETOUR",photos:retSup}].map(({label,photos})=>(
+                      <div key={label} style={{flex:1,padding:"10px 12px",background:"#fff",borderRight:label==="DÉPART"?"1px solid var(--border)":"none"}}>
+                        <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:6}}>{label}</div>
+                        {photos.length?<div style={{display:"flex",flexWrap:"wrap",gap:4}}>{photos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>:<span style={{fontSize:12,color:"var(--muted)"}}>—</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
             {activeDossier.retour?.degats?.length>0&&(
               <div style={{marginTop:14}}>
                 <div style={{fontSize:10,letterSpacing:3,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,fontWeight:700}}>Tarifs des frais de remise en état</div>
@@ -2174,12 +2442,13 @@ export default function App() {
                   {activeDossier.retour.degats.map(id=>{
                     const t=tarifs.find(t=>t.id===id);
                     const vTaux=getVetuste(activeDossier.info?.annee_fab);
+                    const q=activeDossier.retour?.quantites?.[id]||1;
                     return t?(<div key={id} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--border)",fontSize:13,alignItems:"center"}}>
-                      <span style={{flex:1,paddingRight:16}}>{t.label}</span>
-                      <span className="mono" style={{color:"var(--primary)",fontWeight:700,whiteSpace:"nowrap"}}>{t.surDevis?"Sur devis":prixAvecVetuste(t.prix,vTaux)+" €"}</span>
+                      <span style={{flex:1,paddingRight:16}}>{t.label}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span>
+                      <span className="mono" style={{color:"var(--primary)",fontWeight:700,whiteSpace:"nowrap"}}>{t.surDevis?"Sur devis":(q>1?`${q} × ${prixAvecVetuste(t.prix,vTaux)} € = ${(prixAvecVetuste(t.prix,vTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vTaux)+" €")}</span>
                     </div>):null;
                   })}
-                  {(()=>{ const vTaux=getVetuste(activeDossier.info?.annee_fab); const total=activeDossier.retour.degats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix) return s;return s+prixAvecVetuste(t.prix,vTaux);},0); return (
+                  {(()=>{ const vTaux=getVetuste(activeDossier.info?.annee_fab); const total=activeDossier.retour.degats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix) return s;return s+prixAvecVetuste(t.prix,vTaux)*(activeDossier.retour?.quantites?.[id]||1);},0); return (
                     <div>
                       {vTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6,textAlign:"right"}}>Taux de vétusté : {vTaux}% — {activeDossier.info?.annee_fab}</div>}
                       <div className="total-strip" style={{marginTop:10}}>
