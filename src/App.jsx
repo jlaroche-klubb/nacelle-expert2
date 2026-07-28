@@ -1248,6 +1248,43 @@ export default function App() {
     }
     setTriPhoto(null); setTriFilter("");
   }
+  // ─── Modification d'une expertise retour DÉJÀ validée ───
+  // Recharge toutes les données sauvegardées (zones, tests, photos, dégâts,
+  // quantités, notes) dans le formulaire retour. À la re-validation, saveRetour
+  // écrase l'ancienne version et régénère le PDF.
+  function editRetour(d) {
+    if(!d?.retour) return;
+    setFoundDossier(d);
+    setSearchImmat(d.immat);
+    setSearchDone(true);
+    setRetForm({
+      date: d.retour.date || todayISO(),
+      heures: d.retour.heures || "",
+      km_porteur: d.retour.km_porteur || "",
+      agent: d.retour.agent || (userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""),
+      immat: d.immat,
+      numero_cube: d.info?.numero_cube || "",
+      type_nacelle: d.info?.type_nacelle || "",
+      modele: d.info?.modele || "",
+      annee_fab: d.info?.annee_fab || "",
+      client: d.info?.client || "",
+      contrat: d.info?.contrat || "",
+      email: d.info?.email || ""
+    });
+    setRetZones(d.retour.zones || {});
+    setRetTests(d.retour.tests || {});
+    setRetPhotos(d.retour.photos || {});
+    setRetDegats(d.retour.degats || []);
+    setRetQtes(d.retour.quantites || {});
+    setRetNote(d.retour.note || "");
+    setEmailClient(d.info?.email || "");
+    setEmailSent(false);
+    setOpenZone(null);
+    setActiveDossier(null);
+    setRetStep(1);
+    setView("retour");
+  }
+
   // À la validation de l'étape 1 : les photos restées non triées partent en "Photos supplémentaires"
   function flushPendingPhotos() {
     setRetPhotos(prev=>{
@@ -1260,6 +1297,24 @@ export default function App() {
   function setZN(setter,zoneId,note) { setter(prev=>({...prev,[zoneId]:{...(prev[zoneId]||{}),note}})); }
 
   async function saveDepart() {
+    // ── Cycles multiples : une nacelle fait des allers-retours départ→retour→départ...
+    // Si un cycle complet (départ + retour) existe déjà pour cette immat, on l'ARCHIVE
+    // avant de créer le nouveau départ, au lieu de l'écraser définitivement.
+    const previous = dossiers[depForm.immat];
+    if (previous?.retour) {
+      const archiveId = `${previous.immat}__ARCH__${Date.now()}`;
+      const archivedDoc = { ...previous, archived: true, archiveId, archivedAt: new Date().toISOString() };
+      try {
+        await setDoc(doc(db, "dossiers", archiveId), archivedDoc);
+        setDossiers(prev => ({ ...prev, [archiveId]: archivedDoc }));
+        console.log("📦 Cycle précédent archivé:", archiveId);
+      } catch (e) {
+        console.error("Archivage impossible:", e);
+        if (!window.confirm("⚠ L'archivage du cycle précédent a échoué (" + e.message + ").\n\nContinuer quand même ? L'ancien dossier (départ + retour) sera définitivement écrasé.")) {
+          throw new Error("Sauvegarde annulée — cycle précédent conservé");
+        }
+      }
+    }
     const data={
       id:genId(),
       immat:depForm.immat,
@@ -1348,7 +1403,10 @@ export default function App() {
 
   const vetusteTaux = foundDossier ? getVetuste(foundDossier.info?.annee_fab) : 0;
   const totalRetenue = retDegats.reduce((s,id)=>{ const t=tarifs.find(t=>t.id===id); if(!t||t.surDevis||!t.prix) return s; return s+prixAvecVetuste(t.prix,vetusteTaux)*(retQtes[id]||1); },0);
-  const filteredDossiers = Object.values(dossiers).filter(d=>{
+  // Les cycles archivés (allers-retours précédents) sont exclus des listes ; ils restent
+  // consultables dans l'historique du rapport de chaque nacelle.
+  const dossiersActifs = Object.values(dossiers).filter(d=>!d.archived);
+  const filteredDossiers = dossiersActifs.filter(d=>{
     const matchQ = !searchQ||[d.immat,d.info?.client,d.info?.contrat].some(v=>v?.toLowerCase?.().includes(searchQ.toLowerCase()));
     const matchStatut = filterStatut==="tous" || (filterStatut==="retour"&&d.retour) || (filterStatut==="location"&&!d.retour&&!d.depart?.sansDossier) || (filterStatut==="sans_depart"&&d.depart?.sansDossier&&!d.retour);
     return matchQ && matchStatut;
@@ -1571,7 +1629,7 @@ export default function App() {
               </div>
             )}
             <div style={{display:"flex",gap:10,marginBottom:18}}>
-              {[["Dossiers",Object.keys(dossiers).length,"var(--primary)"],["Retours traités",Object.values(dossiers).filter(d=>d.retour).length,"var(--ok)"],["En location",Object.values(dossiers).filter(d=>!d.retour).length,"var(--accent)"]].map(([l,n,c])=>(
+              {[["Dossiers",dossiersActifs.length,"var(--primary)"],["Retours traités",dossiersActifs.filter(d=>d.retour).length,"var(--ok)"],["En location",dossiersActifs.filter(d=>!d.retour).length,"var(--accent)"]].map(([l,n,c])=>(
                 <div key={l} className="card" style={{flex:1,textAlign:"center"}}>
                   <div style={{fontFamily:"'Share Tech Mono'",fontSize:32,color:c,fontWeight:700}}>{n}</div>
                   <div style={{fontSize:10,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginTop:4}}>{l}</div>
@@ -1586,7 +1644,7 @@ export default function App() {
                   <button className="btn btn-icon" onClick={()=>setShowStats(false)}>✕</button>
                 </div>
                 {(()=>{
-                  const tous=Object.values(dossiers);
+                  const tous=dossiersActifs;
                   const avecRetour=tous.filter(d=>d.retour);
                   const tousDegatIds=avecRetour.flatMap(d=>d.retour?.degats||[]);
                   const montants=avecRetour.map(d=>{const vt=getVetuste(d.info?.annee_fab);return (d.retour?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix)return s;return s+prixAvecVetuste(t.prix,vt)*(d.retour?.quantites?.[id]||1);},0);});
@@ -1636,7 +1694,7 @@ export default function App() {
             </div>
             <input placeholder="Rechercher immatriculation, client, contrat..." value={searchQ} onChange={e=>setSearchQ(e.target.value)} style={{marginBottom:10}}/>
             <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
-              {[["tous","Tous",Object.values(dossiers).length],["location","En location",Object.values(dossiers).filter(d=>!d.retour&&!d.depart?.sansDossier).length],["retour","Retour traité",Object.values(dossiers).filter(d=>d.retour).length],["sans_depart","Sans départ",Object.values(dossiers).filter(d=>d.depart?.sansDossier&&!d.retour).length]].map(([val,label,count])=>(
+              {[["tous","Tous",dossiersActifs.length],["location","En location",dossiersActifs.filter(d=>!d.retour&&!d.depart?.sansDossier).length],["retour","Retour traité",dossiersActifs.filter(d=>d.retour).length],["sans_depart","Sans départ",dossiersActifs.filter(d=>d.depart?.sansDossier&&!d.retour).length]].map(([val,label,count])=>(
                 <button key={val} onClick={()=>setFilterStatut(val)} style={{padding:"5px 12px",border:`1px solid ${filterStatut===val?"var(--primary)":"var(--border2)"}`,background:filterStatut===val?"var(--primary)":"#fff",color:filterStatut===val?"#fff":"var(--text)",fontSize:12,fontWeight:filterStatut===val?700:500,cursor:"pointer",fontFamily:"inherit",borderRadius:2,transition:"all .15s"}}>
                   {label} <span style={{opacity:.7}}>({count})</span>
                 </button>
@@ -1916,7 +1974,13 @@ export default function App() {
                         ))}
                       </div>
                       {foundDossier.info?.annee_fab&&(()=>{ const t=getVetuste(foundDossier.info.annee_fab); return t!==0?(<div style={{marginTop:10,padding:"8px 12px",background:"rgba(200,16,46,.06)",color:"var(--accent)",fontSize:12,fontWeight:600}}>⚖ Taux de vétusté : {t}% (nacelle de {foundDossier.info.annee_fab} — {new Date().getFullYear()-parseInt(foundDossier.info.annee_fab)} an{new Date().getFullYear()-parseInt(foundDossier.info.annee_fab)>1?"s":""})</div>):null; })()}
-                      {foundDossier.retour&&<div style={{marginTop:10,padding:"8px 12px",background:"rgba(48,160,80,.08)",color:"#208040",fontSize:12}}>⚠ Dossier retour déjà existant — il sera écrasé.</div>}
+                      {foundDossier.retour&&(
+                        <div style={{marginTop:10,padding:"10px 12px",background:"rgba(26,42,110,.05)",border:"1px solid rgba(26,42,110,.2)"}}>
+                          <div style={{fontSize:12,color:"var(--primary)",fontWeight:600,marginBottom:8}}>✓ Une expertise retour validée existe déjà pour ce dossier ({foundDossier.retour.date||"date inconnue"}).</div>
+                          <button className="btn btn-gold btn-sm" onClick={()=>editRetour(foundDossier)}>✎ Modifier l'expertise existante (ajouter photos, corriger)</button>
+                          <div style={{fontSize:11,color:"var(--muted)",marginTop:8}}>Ou démarrez une nouvelle expertise ci-dessous : l'ancienne sera écrasée et repartira de zéro.</div>
+                        </div>
+                      )}
                     </div>
                     <div className="card" style={{marginBottom:14}}>
                       <div className="g2" style={{marginBottom:12}}>
@@ -2358,6 +2422,7 @@ export default function App() {
               <div className="section-title" style={{marginBottom:0}}>Rapport d'expertise</div>
               <div style={{display:"flex",gap:8}}>
                 <button className="btn btn-outline btn-sm no-print" onClick={goHome}>← Dossiers</button>
+                {activeDossier.retour&&!activeDossier.archived&&<button className="btn btn-accent btn-sm no-print" onClick={()=>editRetour(activeDossier)}>✎ Modifier le retour</button>}
                 <button className="btn btn-outline btn-sm no-print" onClick={()=>window.print()}>⬇ PDF</button>
                 {activeDossier.info?.email && (
                   <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(activeDossier.info.email, activeDossier.immat, "retour")}>📧 Email</button>
@@ -2371,6 +2436,30 @@ export default function App() {
                 ))}
               </div>
             </div>
+            {activeDossier.archived&&(
+              <div className="no-print" style={{marginBottom:10,padding:"10px 14px",background:"rgba(26,42,110,.06)",border:"1px solid rgba(26,42,110,.25)",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                <span style={{fontSize:13,color:"var(--primary)",fontWeight:600}}>📦 Cycle archivé le {activeDossier.archivedAt?new Date(activeDossier.archivedAt).toLocaleDateString("fr-FR"):"—"} — lecture seule</span>
+                {dossiers[activeDossier.immat]&&<button className="btn btn-outline btn-sm" onClick={()=>setActiveDossier(dossiers[activeDossier.immat])}>Voir le dossier actuel →</button>}
+              </div>
+            )}
+            {!activeDossier.archived&&(()=>{
+              const cycles=Object.values(dossiers).filter(d=>d.archived&&d.immat===activeDossier.immat).sort((a,b)=>new Date(b.archivedAt||0)-new Date(a.archivedAt||0));
+              if(!cycles.length) return null;
+              return (
+                <div className="card no-print" style={{marginBottom:10,background:"#f8f9fb"}}>
+                  <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",fontWeight:700,marginBottom:8}}>📦 Historique — {cycles.length} cycle{cycles.length>1?"s":""} précédent{cycles.length>1?"s":""} sur cette nacelle</div>
+                  {cycles.map(c=>(
+                    <div key={c.archiveId} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",border:"1px solid var(--border)",background:"#fff",marginBottom:4,flexWrap:"wrap",gap:6}}>
+                      <span style={{fontSize:13}}>
+                        <span className="mono" style={{fontWeight:700,color:"var(--primary)"}}>{c.depart?.date||"?"} → {c.retour?.date||"?"}</span>
+                        <span style={{color:"var(--muted)",marginLeft:10,fontSize:12}}>{c.info?.client||""}{c.info?.contrat?` · ${c.info.contrat}`:""}</span>
+                      </span>
+                      <button className="btn btn-outline btn-sm" onClick={()=>setActiveDossier(c)}>Voir →</button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
             <div style={{fontSize:10,letterSpacing:3,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,marginTop:14,fontWeight:700}}>Comparaison départ / retour</div>
             {zones.map(zone=>{
               const dep=activeDossier.depart?.zones?.[zone.id]; const ret=activeDossier.retour?.zones?.[zone.id];
@@ -2587,8 +2676,8 @@ export default function App() {
                     <div style={{fontSize:11,color:"var(--accent)",padding:"8px 12px",background:"rgba(200,16,46,.06)",border:"1px solid rgba(200,16,46,.2)",marginBottom:14,lineHeight:1.5}}>
                       ⚠ La suppression est définitive et irréversible. Les photos associées seront perdues.
                     </div>
-                    {Object.values(dossiers).length===0&&<div style={{fontSize:13,color:"var(--muted)",padding:"12px",border:"1px dashed var(--border)"}}>Aucun dossier</div>}
-                    {Object.values(dossiers).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(d=>(
+                    {dossiersActifs.length===0&&<div style={{fontSize:13,color:"var(--muted)",padding:"12px",border:"1px dashed var(--border)"}}>Aucun dossier</div>}
+                    {dossiersActifs.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(d=>(
                       <div key={d.immat} className="admin-row" style={{flexWrap:"wrap",gap:8}}>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
