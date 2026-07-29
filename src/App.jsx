@@ -317,7 +317,7 @@ label{font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--m
 .badge{font-family:'Share Tech Mono',monospace;font-size:11px;padding:3px 8px;}
 .badge-ok{background:rgba(48,160,80,.12);color:#208040;border:1px solid rgba(48,160,80,.3);}
 .badge-warn{background:rgba(26,42,110,.08);color:var(--primary);border:1px solid rgba(26,42,110,.2);}
-.photo-thumb{width:88px;height:64px;object-fit:cover;border:1px solid var(--border2);}
+.photo-thumb{width:88px;height:64px;object-fit:cover;border:1px solid var(--border2);cursor:zoom-in;}
 .photo-add{width:88px;height:64px;border:2px dashed var(--border2);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted);font-size:24px;transition:all .2s;flex-shrink:0;background:#f8f9fb;}
 .photo-add:hover{border-color:var(--primary);color:var(--primary);}
 .zone-row{border:1px solid var(--border);margin-bottom:4px;overflow:hidden;background:#fff;}
@@ -386,6 +386,25 @@ function pickFile(opts={}) {
   });
 }
 async function compressBase64(base64,maxW=800,quality=0.7) {
+  // ─── Redressement EXIF ───
+  // Les téléphones enregistrent souvent les pixels "couchés" + une étiquette EXIF
+  // indiquant la rotation à appliquer. createImageBitmap({imageOrientation:"from-image"})
+  // applique cette rotation de façon fiable : la photo compressée est définitivement
+  // droite, quel que soit le sens du téléphone à la prise de vue.
+  try {
+    const blob = await (await fetch(base64)).blob();
+    const bmp = await createImageBitmap(blob, { imageOrientation: "from-image" });
+    const c=document.createElement("canvas");
+    const r=Math.min(maxW/bmp.width,maxW/bmp.height,1);
+    c.width=Math.round(bmp.width*r); c.height=Math.round(bmp.height*r);
+    c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);
+    bmp.close();
+    return c.toDataURL("image/jpeg",quality);
+  } catch(e) {
+    console.warn("createImageBitmap indisponible, bascule sur la voie classique:", e);
+  }
+  // Voie classique (navigateurs anciens) — les navigateurs récents appliquent
+  // aussi l'orientation EXIF lors du drawImage depuis un élément <img>.
   return new Promise(res => {
     try {
       const img=new Image();
@@ -890,6 +909,16 @@ export default function App() {
   const [searchDone,setSearchDone]=useState(false);
   const [venteImmat,setVenteImmat]=useState("");         // onglet Photos de ventes — immat recherchée
   const [venteSearchDone,setVenteSearchDone]=useState(false);
+  const [lightboxUrl,setLightboxUrl]=useState(null);     // photo affichée en grand (clic pour agrandir)
+  const [rotatingKey,setRotatingKey]=useState(null);     // vignette en cours de rotation manuelle
+
+  // Fermeture de la lightbox avec la touche Échap
+  useEffect(()=>{
+    if(!lightboxUrl) return;
+    const onKey=(e)=>{ if(e.key==="Escape") setLightboxUrl(null); };
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  },[lightboxUrl]);
 
   // ═══════════════════════════════════════════════════════════
   // NAVIGATION ARRIÈRE (History API) — le bouton retour du
@@ -1232,6 +1261,46 @@ export default function App() {
   }
   function removePhoto(zoneId,idx,setter) { setter(prev=>({...prev,[zoneId]:prev[zoneId].filter((_,i)=>i!==idx)})); }
 
+  // ─── Lightbox : un seul écouteur (délégation) — clic sur n'importe quelle photo → agrandissement ───
+  function openLightboxFromClick(e) {
+    const img = e.target;
+    if(!img || img.tagName!=="IMG") return;
+    if(img.closest("button") || img.closest("a") || img.closest(".no-lightbox")) return;
+    const src = img.currentSrc || img.src;
+    if(!src || src===DELTA_LOGO) return; // exclut les logos
+    setLightboxUrl(src);
+  }
+
+  // ─── Rotation manuelle 90° horaire — pour les photos sans étiquette EXIF (ex. chargées d'un PC) ───
+  async function rotateImage90(src) {
+    const img = await new Promise((res,rej)=>{ const i=new Image(); i.crossOrigin="anonymous"; i.onload=()=>res(i); i.onerror=()=>rej(new Error("Chargement de l'image impossible")); i.src=src; });
+    const c=document.createElement("canvas");
+    c.width=img.naturalHeight; c.height=img.naturalWidth;
+    const ctx=c.getContext("2d");
+    ctx.translate(c.width/2,c.height/2); ctx.rotate(Math.PI/2);
+    ctx.drawImage(img,-img.naturalWidth/2,-img.naturalHeight/2);
+    return c.toDataURL("image/jpeg",0.85);
+  }
+  async function rotatePhotoAt(photosObj, zoneId, idx, setter) {
+    const p = photosObj?.[zoneId]?.[idx];
+    if(!p?.url || rotatingKey) return;
+    setRotatingKey(zoneId+"_"+idx);
+    try {
+      const rotated = await rotateImage90(p.url);
+      const { type, immat } = uploadContext(zoneId);
+      const timestamp = Date.now();
+      const rand = Math.random().toString(36).slice(2, 8);
+      const storagePath = `dossiers/${immat}/${type}/${zoneId}/${timestamp}_${rand}_rot.jpg`;
+      const storageRef = ref(storage, storagePath);
+      await withTimeout(uploadString(storageRef, rotated, "data_url"), 90000, "envoi photo pivotée");
+      const url = await withTimeout(getDownloadURL(storageRef), 30000, "récupération URL");
+      setter(prev=>{ const arr=[...(prev[zoneId]||[])]; if(!arr[idx]) return prev; arr[idx]={...arr[idx], url, path:storagePath}; return {...prev,[zoneId]:arr}; });
+    } catch(e) {
+      console.error("Rotation:", e);
+      alert("Rotation impossible : " + e.message);
+    } finally { setRotatingKey(null); }
+  }
+
   // ─── Tri des photos importées en lot (expertise retour) ───
   // Déplace une photo du bac "a_trier" vers une section, un angle du tour ou un dégât.
   // Si c'est un dégât, il est coché automatiquement (quantité 1 par défaut).
@@ -1567,7 +1636,7 @@ export default function App() {
   }
 
   return (
-    <div style={{minHeight:"100vh",background:"var(--bg)"}}>
+    <div style={{minHeight:"100vh",background:"var(--bg)"}} onClick={openLightboxFromClick}>
       <style>{css}</style>
       <div className="accent-bar"/>
       {uploadingCount > 0 && (
@@ -1803,7 +1872,7 @@ export default function App() {
                                     {photo&&<span className="badge badge-ok">✓</span>}
                                   </div>
                                   <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                                    {photo?(<div style={{position:"relative"}}><img src={photo.url} alt="" style={{width:120,height:88,objectFit:"cover",border:"1px solid var(--border2)"}}/><button className="btn btn-danger" onClick={()=>removePhoto(key,0,setDepPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:10}}>✕</button></div>):(<div className="photo-add" style={{width:120,height:88}} onClick={async()=>{
+                                    {photo?(<div style={{position:"relative"}}><img src={photo.url} alt="" style={{width:120,height:88,objectFit:"cover",border:"1px solid var(--border2)",cursor:"zoom-in"}}/><button className="btn" title="Pivoter 90°" disabled={rotatingKey===key+"_"+0} onClick={(e)=>{rotatePhotoAt(depPhotos,key,0,setDepPhotos);}} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===key+"_"+0?"…":"↻"}</button><button className="btn btn-danger" onClick={()=>removePhoto(key,0,setDepPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:10}}>✕</button></div>):(<div className="photo-add" style={{width:120,height:88}} onClick={async()=>{
   const f=await pickFile({multiple:false});
   if(!f) return;
   await addPhotos(f,key,setDepPhotos);
@@ -1831,7 +1900,7 @@ export default function App() {
                             </div>
                             <label>Photos</label>
                             <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                              {(depPhotos[zone.id]||[]).map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn btn-danger" onClick={()=>removePhoto(zone.id,i,setDepPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
+                              {(depPhotos[zone.id]||[]).map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn" title="Pivoter 90°" disabled={rotatingKey===zone.id+"_"+i} onClick={(e)=>{rotatePhotoAt(depPhotos,zone.id,i,setDepPhotos);}} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===zone.id+"_"+i?"…":"↻"}</button><button className="btn btn-danger" onClick={()=>removePhoto(zone.id,i,setDepPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
                               <div className="photo-add" onClick={async()=>{const files=await pickFile({multiple:true});if(files) addPhotos(files,zone.id,setDepPhotos);}}>+</div>
                             </div>
                           </div>
@@ -1856,7 +1925,7 @@ export default function App() {
                     <div className="zone-body">
                       <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>Ajoutez ici toute photo qui ne concerne pas les sections ci-dessus. Vous pouvez en sélectionner plusieurs d'un coup.</div>
                       <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                        {(depPhotos["photos_supplementaires"]||[]).map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn btn-danger" onClick={()=>removePhoto("photos_supplementaires",i,setDepPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
+                        {(depPhotos["photos_supplementaires"]||[]).map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn" title="Pivoter 90°" disabled={rotatingKey==="photos_supplementaires"+"_"+i} onClick={(e)=>{rotatePhotoAt(depPhotos,"photos_supplementaires",i,setDepPhotos);}} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey==="photos_supplementaires"+"_"+i?"…":"↻"}</button><button className="btn btn-danger" onClick={()=>removePhoto("photos_supplementaires",i,setDepPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
                         <div className="photo-add" onClick={async()=>{const f=await pickFile({multiple:true});if(f) addPhotos(f,"photos_supplementaires",setDepPhotos);}}>+</div>
                       </div>
                     </div>
@@ -2120,7 +2189,7 @@ export default function App() {
                       <div style={{fontSize:10,letterSpacing:1.5,color:"var(--accent)",textTransform:"uppercase",fontWeight:700,marginBottom:8}}>{retPhotos["a_trier"].length} photo{retPhotos["a_trier"].length>1?"s":""} à trier — touchez une photo pour l'affecter</div>
                       <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                         {retPhotos["a_trier"].map((p,i)=>(
-                          <div key={i} style={{position:"relative",cursor:"pointer",border:"2px solid var(--accent)"}} onClick={()=>{setTriPhoto(i);setTriFilter("");}}>
+                          <div key={i} className="no-lightbox" style={{position:"relative",cursor:"pointer",border:"2px solid var(--accent)"}} onClick={()=>{setTriPhoto(i);setTriFilter("");}}>
                             <img src={p.url} alt="" style={{width:100,height:74,objectFit:"cover",display:"block"}}/>
                             <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(200,16,46,.85)",color:"#fff",fontSize:9,textAlign:"center",padding:"2px 0",letterSpacing:1,fontWeight:700}}>AFFECTER →</div>
                             <button className="btn btn-danger" onClick={(e)=>{e.stopPropagation();removePhoto("a_trier",i,setRetPhotos);}} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:9}}>✕</button>
@@ -2221,7 +2290,7 @@ export default function App() {
                                         <div style={{fontSize:9,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:6}}>Retour</div>
                                         {retPhoto?(
                                           <div>
-                                            <div style={{position:"relative",display:"inline-block"}}><img src={retPhoto.url} alt="" style={{width:"100%",maxWidth:160,height:110,objectFit:"cover",border:"1px solid var(--border2)"}}/><button className="btn btn-danger" onClick={()=>removePhoto(key,0,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:9}}>✕</button></div>
+                                            <div style={{position:"relative",display:"inline-block"}}><img src={retPhoto.url} alt="" style={{width:"100%",maxWidth:160,height:110,objectFit:"cover",border:"1px solid var(--border2)",cursor:"zoom-in"}}/><button className="btn" title="Pivoter 90°" disabled={rotatingKey===key+"_"+0} onClick={(e)=>{rotatePhotoAt(retPhotos,key,0,setRetPhotos);}} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===key+"_"+0?"…":"↻"}</button><button className="btn btn-danger" onClick={()=>removePhoto(key,0,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:9}}>✕</button></div>
                                           </div>
                                         ):(<div className="photo-add" style={{width:120,height:88}} onClick={async()=>{
                                           const f=await pickFile({multiple:false});
@@ -2251,7 +2320,7 @@ export default function App() {
                                   </select>
                                   <input value={retZones[zone.id]?.note||""} onChange={e=>setZN(setRetZones,zone.id,e.target.value)} placeholder="Observation retour..." style={{marginBottom:8}}/>
                                   <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                                    {(retPhotos[zone.id]||[]).map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn btn-danger" onClick={()=>removePhoto(zone.id,i,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
+                                    {(retPhotos[zone.id]||[]).map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn" title="Pivoter 90°" disabled={rotatingKey===zone.id+"_"+i} onClick={(e)=>{rotatePhotoAt(retPhotos,zone.id,i,setRetPhotos);}} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===zone.id+"_"+i?"…":"↻"}</button><button className="btn btn-danger" onClick={()=>removePhoto(zone.id,i,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
                                     <div className="photo-add" style={{width:64,height:48,fontSize:20}} onClick={async()=>{const f=await pickFile({multiple:true});if(f) addPhotos(f,zone.id,setRetPhotos);}}>+</div>
                                   </div>
                                 </div>
@@ -2289,7 +2358,7 @@ export default function App() {
                                             <button type="button" style={{border:"none",background:"transparent",color:"var(--primary)",padding:"6px 14px",fontSize:16,fontWeight:700,cursor:"pointer",lineHeight:1}} onClick={(e)=>{e.stopPropagation();setRetQtes(prev=>({...prev,[t.id]:Math.min(99,(prev[t.id]||1)+1)}));}}>+</button>
                                           </div>
                                           <span style={{fontSize:10,letterSpacing:1.5,color:"var(--muted)",textTransform:"uppercase",marginRight:4}}>Photos du dégât</span>
-                                          {dphotos.map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn btn-danger" onClick={(e)=>{e.stopPropagation();removePhoto(pkey,i,setRetPhotos);}} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
+                                          {dphotos.map((p,i)=>(<div key={i} style={{position:"relative"}} onClick={(e)=>{e.stopPropagation();setLightboxUrl(p.url);}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn" title="Pivoter 90°" disabled={rotatingKey===pkey+"_"+i} onClick={(e)=>{e.stopPropagation();rotatePhotoAt(retPhotos,pkey,i,setRetPhotos);}} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===pkey+"_"+i?"…":"↻"}</button><button className="btn btn-danger" onClick={(e)=>{e.stopPropagation();removePhoto(pkey,i,setRetPhotos);}} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
                                           <div className="photo-add" style={{width:64,height:48,fontSize:20}} onClick={async(e)=>{e.stopPropagation();const f=await pickFile({multiple:true});if(f) addPhotos(f,pkey,setRetPhotos);}}>+</div>
                                         </div>
                                       )}
@@ -2321,7 +2390,7 @@ export default function App() {
                     <div className="zone-body">
                       <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>Ajoutez ici toute photo qui ne concerne pas les sections ci-dessus. Vous pouvez en sélectionner plusieurs d'un coup.</div>
                       <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                        {(retPhotos["photos_supplementaires"]||[]).map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn btn-danger" onClick={()=>removePhoto("photos_supplementaires",i,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
+                        {(retPhotos["photos_supplementaires"]||[]).map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn" title="Pivoter 90°" disabled={rotatingKey==="photos_supplementaires"+"_"+i} onClick={(e)=>{rotatePhotoAt(retPhotos,"photos_supplementaires",i,setRetPhotos);}} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey==="photos_supplementaires"+"_"+i?"…":"↻"}</button><button className="btn btn-danger" onClick={()=>removePhoto("photos_supplementaires",i,setRetPhotos)} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
                         <div className="photo-add" onClick={async()=>{const f=await pickFile({multiple:true});if(f) addPhotos(f,"photos_supplementaires",setRetPhotos);}}>+</div>
                       </div>
                     </div>
@@ -2633,6 +2702,14 @@ export default function App() {
       <div style={{textAlign:"center",padding:"16px",fontSize:11,color:"var(--muted)",borderTop:"1px solid var(--border)",marginTop:20}} className="no-print">
         © {new Date().getFullYear()} Delta Services · Application propriétaire · Tous droits réservés · Reproduction interdite
       </div>
+
+      {/* LIGHTBOX — clic sur une photo pour l'agrandir */}
+      {lightboxUrl&&(
+        <div className="no-print" onClick={()=>setLightboxUrl(null)} style={{position:"fixed",inset:0,background:"rgba(8,12,30,.93)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:24,cursor:"zoom-out"}}>
+          <img src={lightboxUrl} alt="" style={{maxWidth:"96%",maxHeight:"92%",objectFit:"contain",boxShadow:"0 12px 48px rgba(0,0,0,.6)",background:"#fff"}}/>
+          <button className="btn" onClick={()=>setLightboxUrl(null)} style={{position:"absolute",top:16,right:16,background:"transparent",color:"#fff",border:"1px solid rgba(255,255,255,.5)",padding:"8px 14px"}}>✕ Fermer</button>
+        </div>
+      )}
 
       {/* ADMIN */}
       {adminOpen&&(
