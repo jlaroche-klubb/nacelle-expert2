@@ -4,13 +4,7 @@
 //                                       sinon rapport HTML (rapport_url)
 //   GET /api/rapport/{IMMAT}/depart   → état de départ HTML (collection rapports_links)
 //
-// Pourquoi : les URLs Firebase brutes contiennent un token avec des caractères "="
-// que certaines messageries corrompent à l'envoi (quoted-printable) → lien mort.
-// Ce lien court, sans "=", est mis dans les emails et redirige vers le bon fichier.
-//
-// PRÉREQUIS : variable d'environnement Vercel FIREBASE_SERVICE_ACCOUNT
-// contenant le JSON complet de la clé de compte de service Firebase
-// (Console Firebase → Paramètres du projet → Comptes de service → Générer une clé privée).
+// PRÉREQUIS : variable d'environnement Vercel FIREBASE_SERVICE_ACCOUNT.
 
 import admin from "firebase-admin";
 
@@ -22,9 +16,13 @@ if (!admin.apps.length) {
 
 export default async function handler(req, res) {
   try {
-    const seg = [].concat(req.query.seg || []);
-    const immat = decodeURIComponent(seg[0] || "").toUpperCase().trim();
-    const wantDepart = (seg[1] || "").toLowerCase() === "depart";
+    // Lecture des segments directement depuis l'URL (fiable quel que soit le routage Vercel)
+    // req.url = "/api/rapport/GP-549-BA" ou "/api/rapport/GP-549-BA/depart"
+    const path = (req.url || "").split("?")[0];
+    const parts = path.split("/").filter(Boolean); // ["api","rapport","GP-549-BA","depart"?]
+    const immat = decodeURIComponent(parts[2] || "").toUpperCase().trim();
+    const wantDepart = (parts[3] || "").toLowerCase() === "depart";
+
     if (!immat) {
       res.status(400).send("Immatriculation manquante.");
       return;
