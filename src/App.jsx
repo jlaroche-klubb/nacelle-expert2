@@ -8,6 +8,7 @@ import html2pdf from "html2pdf.js";
 const ADMIN_PASSWORD = "nacelle2024";
 const EMAIL_CC = "assistanat.commerce@delta-services.fr";
 const REMOVE_BG_KEY = "EwW4qNTWQbKeGVs1GaQkiX3W";
+const APP_URL = "https://nacelle-expert2.vercel.app"; // production — utilisé pour les liens courts /api/rapport
 // Photos de ventes (remplies après l'expertise) — détourage Pro+ uniquement sur les 2 extérieures
 const VENTE_SLOTS = [
   { key: "vente_3_4_av_droit", label: "3/4 avant droit", detour: true },
@@ -105,61 +106,46 @@ async function generateAndUploadRetourPdf(element, immat) {
   return { url, path: storagePath };
 }
 
-// Helper function to open mailto with pre-filled email (and link on mobile)
-async function openEmailClient(emailTo, immat, reportType = "depart") {
+// Ouvre la messagerie avec un email pré-rempli contenant un LIEN COURT (/api/rapport).
+// Pourquoi : les URLs Firebase brutes contiennent un token avec des caractères '='
+// que certaines messageries corrompent (encodage quoted-printable) → lien mort.
+// Le lien court, sans '=', passe par une redirection Vercel vers le bon rapport.
+async function openEmailClient(emailTo, immat, reportType = "depart", dossier = null) {
   const isDepart = reportType === "depart";
-  const subject = isDepart 
+  const subject = isDepart
     ? `État de départ · Nacelle ${immat}`
     : `Rapport de restitution · Nacelle ${immat}`;
-  
-  let body = isDepart
-    ? `Bonjour,\n\nVeuillez trouver ci-dessous le constat d'état de départ de la nacelle ${immat}.\n\nCe document fera référence lors de la restitution.\n\n`
-    : `Bonjour,\n\nSuite à la restitution de la nacelle ${immat}, veuillez trouver ci-dessous le rapport complet (départ + retour).\n\n`;
-  
-  // Mobile (pour l'état de départ : lien dans l'e-mail uniquement)
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  const shortLink = isDepart
+    ? `${APP_URL}/api/rapport/${immat}/depart`
+    : `${APP_URL}/api/rapport/${immat}`;
 
-  if (reportType === "retour") {
-    // Rapport de restitution : toujours uploadé + lien conservé sur le dossier (Delta VO / facture)
-    try {
+  try {
+    if (isDepart) {
+      // Publie l'état de départ (page HTML) et mémorise son URL dans la collection
+      // "rapports_links" (cible de la redirection /api/rapport/{immat}/depart).
+      // Collection séparée : ne crée pas de dossier fantôme avant la validation.
       const htmlContent = captureCurrentPageHTML();
-      const reportUrl = await uploadReportToStorage(htmlContent, immat, reportType);
-      body += `📄 Rapport complet :
-${reportUrl}
-
-`;
-      try {
-        await updateDoc(doc(db, "dossiers", immat), {
-          rapport_url: reportUrl,
-          rapport_url_at: new Date().toISOString(),
-        });
-      } catch (e) {
-        console.error('Persist rapport_url failed:', e);
-      }
-    } catch (error) {
-      console.error('Upload failed:', error);
-      body += `(Le lien du rapport n'a pas pu être généré)
-
-`;
-    }
-  } else if (isMobile) {
-    try {
+      const reportUrl = await uploadReportToStorage(htmlContent, immat, "depart");
+      await setDoc(doc(db, "rapports_links", immat), { depart_url: reportUrl, updatedAt: new Date().toISOString() }, { merge: true });
+    } else if (!dossier?.retour?.pdf_url && !dossier?.rapport_url) {
+      // Ancien dossier retour sans PDF : publie une version HTML comme cible de la redirection
       const htmlContent = captureCurrentPageHTML();
-      const reportUrl = await uploadReportToStorage(htmlContent, immat, reportType);
-      body += `📄 Rapport complet :
-${reportUrl}
-
-`;
-    } catch (error) {
-      console.error('Upload failed:', error);
-      body += `(Le lien du rapport n'a pas pu être généré)
-
-`;
+      const reportUrl = await uploadReportToStorage(htmlContent, immat, "retour");
+      await updateDoc(doc(db, "dossiers", immat), {
+        rapport_url: reportUrl,
+        rapport_url_at: new Date().toISOString(),
+      });
     }
+  } catch (error) {
+    console.error('Préparation du lien rapport:', error);
+    alert("⚠ Le lien du rapport n'a pas pu être préparé (" + error.message + ").\nL'email sera ouvert quand même, mais vérifiez le lien avant envoi.");
   }
 
-  body += `Cordialement,\nDelta Services\n14 Avenue James de Rothschild · 77164 Ferrières-en-Brie\nTél. +33 (0)1 60 95 47 80`;
-  
+  const body = (isDepart
+    ? `Bonjour,\n\nVeuillez trouver ci-dessous le constat d'état de départ de la nacelle ${immat}.\nCe document fera référence lors de la restitution.\n\nConsulter le rapport :\n${shortLink}\n\n`
+    : `Bonjour,\n\nSuite à la restitution de la nacelle ${immat}, veuillez trouver ci-dessous le rapport d'expertise complet (état de départ + état de retour).\n\nConsulter le rapport :\n${shortLink}\n\n`)
+    + `Cordialement,\nDelta Services\n14 Avenue James de Rothschild · 77164 Ferrières-en-Brie\nTél. +33 (0)1 60 95 47 80`;
+
   const mailtoLink = `mailto:${emailTo}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}&cc=${EMAIL_CC}`;
   window.open(mailtoLink, '_blank');
 }
@@ -782,6 +768,37 @@ function testNacelleHTML(tests) {
 }
 
 
+// ─── Cadre de signature tactile (client) — dessin au doigt ou à la souris ───
+function SignaturePad({ value, onChange }) {
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+  const hasInk = useRef(false);
+  useEffect(()=>{
+    const c = canvasRef.current; if(!c) return;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0,0,c.width,c.height);
+    ctx.strokeStyle = "#1a2a6e"; ctx.lineWidth = 2.2; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    // Reprise d'un brouillon : repeint la signature déjà tracée
+    if(value){ const img=new Image(); img.onload=()=>{ ctx.drawImage(img,0,0,c.width,c.height); hasInk.current=true; }; img.src=value; }
+  },[]);
+  function pos(e){ const c=canvasRef.current; const r=c.getBoundingClientRect(); const p=e.touches?e.touches[0]:e; return { x:(p.clientX-r.left)*(c.width/r.width), y:(p.clientY-r.top)*(c.height/r.height) }; }
+  function start(e){ drawing.current=true; const {x,y}=pos(e); const ctx=canvasRef.current.getContext("2d"); ctx.beginPath(); ctx.moveTo(x,y); }
+  function move(e){ if(!drawing.current) return; const {x,y}=pos(e); const ctx=canvasRef.current.getContext("2d"); ctx.lineTo(x,y); ctx.stroke(); hasInk.current=true; }
+  function end(){ if(!drawing.current) return; drawing.current=false; if(hasInk.current&&onChange) onChange(canvasRef.current.toDataURL("image/png")); }
+  function clear(){ const c=canvasRef.current; const ctx=c.getContext("2d"); ctx.fillStyle="#fff"; ctx.fillRect(0,0,c.width,c.height); ctx.strokeStyle="#1a2a6e"; ctx.lineWidth=2.2; hasInk.current=false; if(onChange) onChange(null); }
+  return (
+    <div>
+      <canvas ref={canvasRef} width={560} height={200}
+        onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+        onTouchStart={start} onTouchMove={move} onTouchEnd={end}
+        style={{width:"100%",maxWidth:560,height:200,border:"2px dashed var(--border2)",background:"#fff",touchAction:"none",cursor:"crosshair",display:"block"}}/>
+      <div style={{marginTop:6}}>
+        <button type="button" className="btn btn-outline btn-sm" onClick={clear}>✕ Effacer / recommencer</button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [view,setView]=useState("home");
   const [uploadingCount, setUploadingCount] = useState(0);
@@ -830,6 +847,7 @@ export default function App() {
         const light = {...data};
         if(light.depPhotos) light.depPhotos = {};
         if(light.retPhotos) light.retPhotos = {};
+        if(light.depSignature) light.depSignature = null;
         // Le dossier départ peut être volumineux (anciennes photos base64) → on ne garde que l'immat.
         // À la reprise, le dossier complet est rechargé depuis la mémoire (state "dossiers").
         if(light.foundDossier) light.foundDossier = { immat: light.foundDossier.immat };
@@ -861,6 +879,7 @@ export default function App() {
       setDepTests(draft.data.depTests || {});
       setDepPhotos(draft.data.depPhotos || {});
       setDepStep(draft.data.depStep || 1);
+      setDepSignature(draft.data.depSignature || null);
       setView("depart");
     } else if(draft.type==="retour") {
       setRetForm(draft.data.retForm || {date:todayISO(),heures:"",km_porteur:"",agent:"",immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:""});
@@ -911,6 +930,9 @@ export default function App() {
   const [venteSearchDone,setVenteSearchDone]=useState(false);
   const [lightboxUrl,setLightboxUrl]=useState(null);     // photo affichée en grand (clic pour agrandir)
   const [rotatingKey,setRotatingKey]=useState(null);     // vignette en cours de rotation manuelle
+  const [depTriPhoto,setDepTriPhoto]=useState(null);     // photo du bac départ en cours d'affectation
+  const [depTriFilter,setDepTriFilter]=useState("");
+  const [depSignature,setDepSignature]=useState(null);   // signature client (dataURL) — état de départ
 
   // Fermeture de la lightbox avec la touche Échap
   useEffect(()=>{
@@ -963,9 +985,9 @@ export default function App() {
   // Auto-save DÉPART (brouillon)
   useEffect(()=>{
     if(view==="depart" && depStep > 0) {
-      saveDraft("depart", { depForm, depZones, depTests, depPhotos, depStep });
+      saveDraft("depart", { depForm, depZones, depTests, depPhotos, depStep, depSignature });
     }
-  },[view, depForm, depZones, depTests, depPhotos, depStep]);
+  },[view, depForm, depZones, depTests, depPhotos, depStep, depSignature]);
 
   // Auto-save RETOUR (brouillon)
   useEffect(()=>{
@@ -1317,6 +1339,16 @@ export default function App() {
     }
     setTriPhoto(null); setTriFilter("");
   }
+  // Affectation d'une photo du bac DÉPART (sections / angles du tour / photos supplémentaires — pas de dégâts au départ)
+  function assignDepPendingPhoto(idx, targetKey) {
+    setDepPhotos(prev=>{
+      const pool=[...(prev["a_trier"]||[])];
+      const photo=pool.splice(idx,1)[0];
+      if(!photo) return prev;
+      return {...prev, a_trier:pool, [targetKey]:[...(prev[targetKey]||[]), photo]};
+    });
+    setDepTriPhoto(null); setDepTriFilter("");
+  }
   // ─── Modification d'une expertise retour DÉJÀ validée ───
   // Recharge toutes les données sauvegardées (zones, tests, photos, dégâts,
   // quantités, notes) dans le formulaire retour. À la re-validation, saveRetour
@@ -1384,11 +1416,26 @@ export default function App() {
         }
       }
     }
+    // Signature client (optionnelle) : upload PNG dans Storage
+    let signatureInfo = null;
+    if (depSignature) {
+      try {
+        const sigPath = `dossiers/${(depForm.immat||"no-immat").replace(/[^A-Z0-9-]/gi,"_")}/depart/signature_${Date.now()}.png`;
+        const sigRef = ref(storage, sigPath);
+        await uploadString(sigRef, depSignature, "data_url");
+        const sigUrl = await getDownloadURL(sigRef);
+        signatureInfo = { url: sigUrl, signedAt: new Date().toISOString() };
+      } catch(e) {
+        console.error("Upload signature:", e);
+        alert("⚠ La signature n'a pas pu être enregistrée (" + e.message + ").\nLe dossier sera sauvegardé sans signature.");
+      }
+    }
     const data={
       id:genId(),
       immat:depForm.immat,
       info:{...depForm},
-      depart:{zones:depZones,photos:depPhotos,tests:depTests,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent},
+      // Le bac "a_trier" n'est jamais sauvegardé : les photos non affectées sont abandonnées (confirmées avant validation)
+      depart:{zones:depZones,photos:(()=>{ const {a_trier,...rest}=depPhotos; return rest; })(),tests:depTests,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent,...(signatureInfo?{signature_client:signatureInfo}:{})},
       retour:null,
       createdAt:new Date().toISOString(),
       createdBy: currentUser?.uid || null,
@@ -1481,7 +1528,7 @@ export default function App() {
     return matchQ && matchStatut;
   });
 
-  function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setVenteImmat("");setVenteSearchDone(false);setEmailClient("");setEmailSent(false);setDepEmailSent(false);setDepEmailSending(false);setDepTests({});setRetTests({}); }
+  function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setVenteImmat("");setVenteSearchDone(false);setEmailClient("");setEmailSent(false);setDepEmailSent(false);setDepEmailSending(false);setDepTests({});setRetTests({});setDepSignature(null);setDepTriPhoto(null);setDepTriFilter(""); }
 
   // --- Régénération Pro+ d'une photo commerciale sur un dossier déjà terminé (vue rapport) ---
   // Non destructif : on génère un aperçu, et le remplacement n'a lieu qu'après confirmation.
@@ -1663,7 +1710,7 @@ export default function App() {
           {view==="home"&&<>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("ventes");setActiveDossier(null);setVenteImmat("");setVenteSearchDone(false);}}>📷 Photos de ventes</button>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>Expertise Retour</button>
-            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});}}>+ Nouveau départ</button>
+            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});setDepSignature(null);}}>+ Nouveau départ</button>
           </>}
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={handleLogout} title="Déconnexion">🚪</button>
         </div>
@@ -1840,6 +1887,66 @@ export default function App() {
             {depStep===1&&(
               <div>
                 <TestNacelle tests={depTests} onChange={setDepTests} />
+                {/* Import de photos en lot — départ */}
+                <div className="card" style={{marginBottom:14,border:"2px dashed var(--border2)",background:"#f8f9fb"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                    <div>
+                      <div style={{fontSize:11,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",fontWeight:700}}>📥 Import de photos en lot</div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Importez toutes vos photos d'un coup, puis touchez chaque photo pour l'affecter à une section ou un angle du tour.</div>
+                    </div>
+                    <button className="btn btn-gold btn-sm" onClick={async()=>{const f=await pickFile({multiple:true});if(f) addPhotos(f,"a_trier",setDepPhotos);}}>+ Importer des photos</button>
+                  </div>
+                  {(depPhotos["a_trier"]||[]).length>0&&(
+                    <div style={{marginTop:12}}>
+                      <div style={{fontSize:10,letterSpacing:1.5,color:"var(--accent)",textTransform:"uppercase",fontWeight:700,marginBottom:8}}>{depPhotos["a_trier"].length} photo{depPhotos["a_trier"].length>1?"s":""} à trier — touchez une photo pour l'affecter</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                        {depPhotos["a_trier"].map((p,i)=>(
+                          <div key={i} className="no-lightbox" style={{position:"relative",cursor:"pointer",border:"2px solid var(--accent)"}} onClick={()=>{setDepTriPhoto(i);setDepTriFilter("");}}>
+                            <img src={p.url} alt="" style={{width:100,height:74,objectFit:"cover",display:"block"}}/>
+                            <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(200,16,46,.85)",color:"#fff",fontSize:9,textAlign:"center",padding:"2px 0",letterSpacing:1,fontWeight:700}}>AFFECTER →</div>
+                            <button className="btn btn-danger" onClick={(e)=>{e.stopPropagation();removePhoto("a_trier",i,setDepPhotos);}} style={{position:"absolute",top:2,right:2,padding:"2px 5px",fontSize:9}}>✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal d'affectation d'une photo à trier — départ */}
+                {depTriPhoto!==null&&(depPhotos["a_trier"]||[])[depTriPhoto]&&(
+                  <div className="modal-overlay" onClick={()=>{setDepTriPhoto(null);setDepTriFilter("");}}>
+                    <div className="modal" onClick={e=>e.stopPropagation()}>
+                      <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:14}}>
+                        <img src={depPhotos["a_trier"][depTriPhoto].url} alt="" style={{width:110,height:80,objectFit:"cover",border:"1px solid var(--border2)",flexShrink:0}}/>
+                        <div>
+                          <div style={{fontSize:12,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",fontWeight:700}}>Affecter cette photo</div>
+                          <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Choisissez une section, un angle du tour ou les photos supplémentaires.</div>
+                        </div>
+                      </div>
+                      <input value={depTriFilter} onChange={e=>setDepTriFilter(e.target.value)} placeholder="🔍 Rechercher (ex: gyro, bac, phare...)" style={{marginBottom:10}}/>
+                      <div style={{maxHeight:"46vh",overflowY:"auto"}}>
+                        {"photos supplémentaires".includes(depTriFilter.toLowerCase())&&(
+                          <div className="tarif-row" onClick={()=>assignDepPendingPhoto(depTriPhoto,"photos_supplementaires")}>
+                            <span style={{fontSize:13}}>🖼 Photos supplémentaires <span style={{color:"var(--muted)",fontSize:11}}>(hors sections)</span></span>
+                          </div>
+                        )}
+                        {TOUR_ANGLES.filter(a=>!depPhotos[`tour_complet_${a.key}`]?.[0]&&(`tour complet ${a.label}`.toLowerCase().includes(depTriFilter.toLowerCase()))).map(a=>(
+                          <div key={a.key} className="tarif-row" onClick={()=>assignDepPendingPhoto(depTriPhoto,`tour_complet_${a.key}`)}>
+                            <span style={{fontSize:13}}>📷 Tour complet — {a.label}</span>
+                          </div>
+                        ))}
+                        {zones.filter(z=>z.id!=="tour_complet"&&(!depTriFilter||z.label.toLowerCase().includes(depTriFilter.toLowerCase()))).map(z=>(
+                          <div key={z.id} className="tarif-row" onClick={()=>assignDepPendingPhoto(depTriPhoto,z.id)}>
+                            <span style={{fontSize:13}}>{z.icon} {z.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{display:"flex",justifyContent:"flex-end",marginTop:12}}>
+                        <button className="btn btn-outline btn-sm" onClick={()=>{setDepTriPhoto(null);setDepTriFilter("");}}>Annuler</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div className="section-title">État des zones</div>
                 {zones.map(zone=>(
                   <div key={zone.id} className="zone-row">
@@ -1947,7 +2054,7 @@ export default function App() {
                     {depForm.email && (
                       <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(depForm.email, depForm.immat, "depart")}>📧 Email</button>
                     )}
-                    <button className="btn btn-gold" onClick={async()=>{await saveDepart();clearDraft("depart");goHome();}} disabled={!depForm.immat || uploadingCount > 0}>{uploadingCount > 0 ? `⏳ Upload en cours (${uploadingCount})` : "✓ Valider & sauvegarder"}</button>
+                    <button className="btn btn-gold" onClick={async()=>{const pending=(depPhotos["a_trier"]||[]).length; if(pending&&!window.confirm(`${pending} photo${pending>1?"s":""} du bac d'import n'${pending>1?"ont":"a"} pas été affectée${pending>1?"s":""} et ser${pending>1?"ont":"a"} abandonnée${pending>1?"s":""}.\n\nValider quand même ?`)) return; await saveDepart();clearDraft("depart");goHome();}} disabled={!depForm.immat || uploadingCount > 0}>{uploadingCount > 0 ? `⏳ Upload en cours (${uploadingCount})` : "✓ Valider & sauvegarder"}</button>
                   </div>
                 </div>
                 <div className="card" style={{marginBottom:10}}>
@@ -1990,6 +2097,20 @@ export default function App() {
                     <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:8}}>{depPhotos["photos_supplementaires"].map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>
                   </div>
                 )}
+                {/* Signature client (optionnelle) — le canvas ne s'imprime pas, l'image enregistrée oui */}
+                <div className="card" style={{marginTop:14}}>
+                  <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:8}}>Signature client — état de départ</div>
+                  <div className="no-print">
+                    <div style={{fontSize:11,color:"var(--muted)",marginBottom:8}}>Faites signer le client dans le cadre ci-dessous (au doigt sur téléphone/tablette). Optionnel.</div>
+                    <SignaturePad value={depSignature} onChange={setDepSignature}/>
+                  </div>
+                  {depSignature&&(
+                    <div style={{marginTop:8}}>
+                      <img src={depSignature} alt="Signature client" className="no-lightbox" style={{maxWidth:260,border:"1px solid var(--border)",background:"#fff"}}/>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:4}} className="no-print">Signature enregistrée — elle sera jointe au dossier à la validation.</div>
+                    </div>
+                  )}
+                </div>
                 <div className="card no-print" style={{marginTop:14}}>
                   <label>Email client — pour envoi de l'état de départ</label>
                   <input type="email" value={depForm.email} onChange={e=>setDepForm({...depForm,email:e.target.value})} placeholder="client@email.com" style={{marginBottom:8}}/>
@@ -2465,7 +2586,7 @@ export default function App() {
                   <button className="btn btn-outline" onClick={()=>setRetStep(1)}>← Modifier</button>
                   <button className="btn btn-outline btn-sm no-print" onClick={()=>window.print()}>⬇ PDF</button>
                   {emailClient && (
-                    <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(emailClient, foundDossier.immat, "retour")}>📧 Email</button>
+                    <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(emailClient, foundDossier.immat, "retour", foundDossier)}>📧 Email</button>
                   )}
                   <button className="btn btn-gold" disabled={uploadingCount > 0 || savingRetour} onClick={async()=>{
                     setSavingRetour(true);
@@ -2494,7 +2615,7 @@ export default function App() {
                 {activeDossier.retour&&!activeDossier.archived&&<button className="btn btn-accent btn-sm no-print" onClick={()=>editRetour(activeDossier)}>✎ Modifier le retour</button>}
                 <button className="btn btn-outline btn-sm no-print" onClick={()=>window.print()}>⬇ PDF</button>
                 {activeDossier.info?.email && (
-                  <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(activeDossier.info.email, activeDossier.immat, "retour")}>📧 Email</button>
+                  <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(activeDossier.info.email, activeDossier.immat, "retour", activeDossier)}>📧 Email</button>
                 )}
               </div>
             </div>
@@ -2620,6 +2741,13 @@ export default function App() {
             )}
             {!activeDossier.retour?.degats?.length&&activeDossier.retour&&(<div style={{marginTop:12,padding:"14px 16px",border:"1px solid rgba(48,160,80,.3)",background:"rgba(48,160,80,.06)",color:"#208040",fontSize:13,fontWeight:600}}>✓ Aucun dégât constaté — nacelle rendue conforme</div>)}
             {activeDossier.retour?.note&&<div className="card" style={{marginTop:10}}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:6}}>Notes</div><div style={{fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{activeDossier.retour.note}</div></div>}
+            {activeDossier.depart?.signature_client?.url&&(
+              <div className="card" style={{marginTop:10}}>
+                <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:6}}>Signature client — état de départ</div>
+                <img src={activeDossier.depart.signature_client.url} alt="Signature client" style={{maxWidth:260,border:"1px solid var(--border)",background:"#fff"}}/>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>Signé le {new Date(activeDossier.depart.signature_client.signedAt).toLocaleString("fr-FR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})}</div>
+              </div>
+            )}
             <div style={{marginTop:6,padding:"10px 14px",background:"#f8f9fb",border:"1px solid var(--border)",fontSize:11,color:"var(--muted)",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
               <span>DELTA SERVICES / 14 Avenue James de Rothschild / 77164 Ferrières-en-Brie · Tel. +33 (0)1 60 95 47 80 · Siret : 512 252 792 00050</span>
               <span style={{fontWeight:600,color:"var(--primary)"}}>© {new Date().getFullYear()} Delta Services · Tous droits réservés</span>
