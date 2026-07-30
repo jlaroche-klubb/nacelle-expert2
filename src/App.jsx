@@ -9,6 +9,19 @@ const ADMIN_PASSWORD = "nacelle2024";
 const EMAIL_CC = "assistanat.commerce@delta-services.fr";
 const REMOVE_BG_KEY = "EwW4qNTWQbKeGVs1GaQkiX3W";
 const APP_URL = "https://nacelle-expert2.vercel.app"; // production — utilisé pour les liens courts /api/rapport
+
+// Normalise une immatriculation au format SIV "AB-123-CD" (majuscules, tirets)
+// dès que la saisie correspond au motif 2 lettres + 3 chiffres + 2 lettres,
+// quels que soient les séparateurs tapés (espaces, points, rien...).
+// Hors format SIV (engins, plaques étrangères) : majuscules simples, inchangé.
+function normalizeImmat(raw) {
+  const s = (raw || "").toUpperCase();
+  const compact = s.replace(/[\s.\-_]/g, "");
+  if (/^[A-Z]{2}[0-9]{3}[A-Z]{2}$/.test(compact)) {
+    return compact.slice(0, 2) + "-" + compact.slice(2, 5) + "-" + compact.slice(5);
+  }
+  return s;
+}
 // Photos de ventes (remplies après l'expertise) — détourage Pro+ uniquement sur les 2 extérieures
 const VENTE_SLOTS = [
   { key: "vente_3_4_av_droit", label: "3/4 avant droit", detour: true },
@@ -838,23 +851,35 @@ export default function App() {
   // SYSTÈME DE BROUILLON — Sauvegarde automatique en continu
   // ═══════════════════════════════════════════════════════════
   function saveDraft(type, data) {
+    const key = `nacelle_draft_${type}`;
+    const stamp = () => new Date().toISOString();
+    // Niveau 1 : brouillon complet
     try {
-      localStorage.setItem(`nacelle_draft_${type}`, JSON.stringify({...data, savedAt: new Date().toISOString()}));
+      localStorage.setItem(key, JSON.stringify({...data, savedAt: stamp()}));
       console.log(`💾 Brouillon ${type} sauvegardé`);
-    } catch(e) {
-      // Si trop gros (photos), sauvegarder sans les photos
-      try {
-        const light = {...data};
-        if(light.depPhotos) light.depPhotos = {};
-        if(light.retPhotos) light.retPhotos = {};
-        if(light.depSignature) light.depSignature = null;
-        // Le dossier départ peut être volumineux (anciennes photos base64) → on ne garde que l'immat.
-        // À la reprise, le dossier complet est rechargé depuis la mémoire (state "dossiers").
-        if(light.foundDossier) light.foundDossier = { immat: light.foundDossier.immat };
-        localStorage.setItem(`nacelle_draft_${type}`, JSON.stringify({...light, savedAt: new Date().toISOString(), photosLost: true}));
-        console.log(`💾 Brouillon ${type} sauvegardé (sans photos)`);
-      } catch(e2) { console.error("Impossible de sauvegarder le brouillon:", e2); }
-    }
+      return;
+    } catch(e) { /* quota dépassé → niveau 2 */ }
+    // Niveau 2 : on retire UNIQUEMENT le dossier départ embarqué (anciennes photos base64
+    // très lourdes sur les dossiers pré-migration) — les photos d'expertise sont de simples
+    // URLs Storage, légères : on les CONSERVE. À la reprise, le dossier départ complet est
+    // rechargé depuis la mémoire (state "dossiers") à partir de l'immat.
+    try {
+      const mid = {...data};
+      if(mid.foundDossier) mid.foundDossier = { immat: mid.foundDossier.immat };
+      localStorage.setItem(key, JSON.stringify({...mid, savedAt: stamp()}));
+      console.log(`💾 Brouillon ${type} sauvegardé (dossier départ allégé, photos conservées)`);
+      return;
+    } catch(e) { /* toujours trop gros → niveau 3 */ }
+    // Niveau 3 (dernier recours) : sans les photos ni la signature
+    try {
+      const light = {...data};
+      if(light.depPhotos) light.depPhotos = {};
+      if(light.retPhotos) light.retPhotos = {};
+      if(light.depSignature) light.depSignature = null;
+      if(light.foundDossier) light.foundDossier = { immat: light.foundDossier.immat };
+      localStorage.setItem(key, JSON.stringify({...light, savedAt: stamp(), photosLost: true}));
+      console.log(`💾 Brouillon ${type} sauvegardé (sans photos)`);
+    } catch(e2) { console.error("Impossible de sauvegarder le brouillon:", e2); }
   }
   function loadDraft(type) {
     try {
@@ -1420,7 +1445,9 @@ export default function App() {
     let signatureInfo = null;
     if (depSignature) {
       try {
-        const sigPath = `dossiers/${(depForm.immat||"no-immat").replace(/[^A-Z0-9-]/gi,"_")}/depart/signature_${Date.now()}.png`;
+        // Même profondeur de chemin que les photos (dossiers/immat/type/zone/fichier)
+        // pour correspondre aux règles de sécurité Storage existantes.
+        const sigPath = `dossiers/${(depForm.immat||"no-immat").replace(/[^A-Z0-9-]/gi,"_")}/depart/signature/${Date.now()}.png`;
         const sigRef = ref(storage, sigPath);
         await uploadString(sigRef, depSignature, "data_url");
         const sigUrl = await getDownloadURL(sigRef);
@@ -1853,7 +1880,7 @@ export default function App() {
                 <div className="section-title">Identification nacelle</div>
                 <div className="card" style={{marginBottom:14}}>
                   <div className="g3" style={{marginBottom:12}}>
-                    <div><label>Immatriculation *</label><input value={depForm.immat} onChange={e=>setDepForm({...depForm,immat:e.target.value.toUpperCase()})} placeholder="AB-123-CD"/></div>
+                    <div><label>Immatriculation *</label><input value={depForm.immat} onChange={e=>setDepForm({...depForm,immat:normalizeImmat(e.target.value)})} placeholder="AB-123-CD"/></div>
                     <div><label>Type nacelle</label><input value={depForm.type_nacelle} onChange={e=>setDepForm({...depForm,type_nacelle:e.target.value})} placeholder="KL32/PT160/KL21/TARRIERE"/></div>
                     <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
                   </div>
@@ -2133,7 +2160,7 @@ export default function App() {
                 <div className="card" style={{marginBottom:14}}>
                   <label>Immatriculation nacelle</label>
                   <div style={{display:"flex",gap:8}}>
-                    <input value={searchImmat} onChange={e=>{setSearchImmat(e.target.value.toUpperCase());setSearchDone(false);}} placeholder="AB-123-CD" style={{flex:1}} onKeyDown={e=>{if(e.key==="Enter"){setFoundDossier(dossiers[searchImmat]||null);setSearchDone(true);}}}/>
+                    <input value={searchImmat} onChange={e=>{setSearchImmat(normalizeImmat(e.target.value));setSearchDone(false);}} placeholder="AB-123-CD" style={{flex:1}} onKeyDown={e=>{if(e.key==="Enter"){setFoundDossier(dossiers[searchImmat]||null);setSearchDone(true);}}}/>
                     <button className="btn btn-gold" onClick={()=>{setFoundDossier(dossiers[searchImmat]||null);setSearchDone(true);}}>Rechercher</button>
                   </div>
                 </div>
@@ -2774,7 +2801,7 @@ export default function App() {
             <div className="card" style={{marginBottom:14}}>
               <label>Immatriculation nacelle</label>
               <div style={{display:"flex",gap:8}}>
-                <input value={venteImmat} onChange={e=>{setVenteImmat(e.target.value.toUpperCase());setVenteSearchDone(false);}} placeholder="AB-123-CD" style={{flex:1}} onKeyDown={e=>{if(e.key==="Enter"){setActiveDossier(dossiers[venteImmat]||null);setVenteSearchDone(true);}}}/>
+                <input value={venteImmat} onChange={e=>{setVenteImmat(normalizeImmat(e.target.value));setVenteSearchDone(false);}} placeholder="AB-123-CD" style={{flex:1}} onKeyDown={e=>{if(e.key==="Enter"){setActiveDossier(dossiers[venteImmat]||null);setVenteSearchDone(true);}}}/>
                 <button className="btn btn-gold" onClick={()=>{setActiveDossier(dossiers[venteImmat]||null);setVenteSearchDone(true);}}>Rechercher</button>
               </div>
             </div>
