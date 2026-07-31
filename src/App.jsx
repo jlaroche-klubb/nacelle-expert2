@@ -978,6 +978,7 @@ export default function App() {
   const [retQtes,setRetQtes]=useState({}); // { tarifId: quantité } — 1 par défaut
   const [triPhoto,setTriPhoto]=useState(null);   // index de la photo "à trier" en cours d'affectation
   const [triFilter,setTriFilter]=useState("");   // recherche dans la liste d'affectation
+  const [showInfoEdit,setShowInfoEdit]=useState(false); // panneau de correction des infos du dossier (immat, km...)
   const [retNote,setRetNote]=useState("");
   const [emailClient,setEmailClient]=useState("");
   const [emailSending,setEmailSending]=useState(false);
@@ -1518,7 +1519,20 @@ export default function App() {
   }
   async function saveRetour() {
     if(!foundDossier) return;
-    
+
+    // ── Correction d'immatriculation (faute de frappe) ──
+    // Le dossier est indexé par immat dans Firestore : si elle a changé,
+    // on sauvegarde sous la nouvelle clé puis on supprime l'ancien document.
+    const renamedFrom = foundDossier._renamedFrom;
+    const isRenamed = !!renamedFrom && renamedFrom !== foundDossier.immat;
+    if (isRenamed) {
+      const clash = dossiers[foundDossier.immat];
+      if (clash && clash.id !== foundDossier.id) {
+        alert(`⚠ Impossible de corriger l'immatriculation : un autre dossier existe déjà pour « ${foundDossier.immat} ».`);
+        return null;
+      }
+    }
+
     // Génération du PDF de restitution (côté navigateur) + upload Firebase Storage
     let pdfInfo = null;
     try {
@@ -1559,7 +1573,14 @@ export default function App() {
       updatedBy: currentUser?.uid || null,
       updatedByName: userProfile ? `${userProfile.prenom} ${userProfile.nom}` : retForm.agent
     };
-    await fbSaveDossier(updated); setDossiers(prev=>({...prev,[updated.immat]:updated})); setActiveDossier(updated); return updated;
+    delete updated._renamedFrom; // champ de travail : ne pas persister
+    await fbSaveDossier(updated);
+    if (isRenamed) {
+      try { await deleteDoc(doc(db, "dossiers", renamedFrom)); console.log("🔤 Immat corrigée :", renamedFrom, "→", updated.immat); }
+      catch(e) { console.error("Suppression ancien dossier:", e); }
+    }
+    setDossiers(prev=>{ const n={...prev,[updated.immat]:updated}; if(isRenamed) delete n[renamedFrom]; return n; });
+    setActiveDossier(updated); return updated;
   }
 
   async function saveZone() {
@@ -1601,7 +1622,7 @@ export default function App() {
     return matchQ && matchStatut;
   });
 
-  function goHome() { setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setVenteImmat("");setVenteSearchDone(false);setEmailClient("");setEmailSent(false);setDepEmailSent(false);setDepEmailSending(false);setDepTests({});setRetTests({});setDepSignature(null);setDepTriPhoto(null);setDepTriFilter(""); }
+  function goHome() { setShowInfoEdit(false); setView("home");setDepStep(0);setRetStep(0);setFoundDossier(null);setOpenZone(null);setSearchDone(false);setVenteImmat("");setVenteSearchDone(false);setEmailClient("");setEmailSent(false);setDepEmailSent(false);setDepEmailSending(false);setDepTests({});setRetTests({});setDepSignature(null);setDepTriPhoto(null);setDepTriFilter(""); }
 
   // --- Régénération Pro+ d'une photo commerciale sur un dossier déjà terminé (vue rapport) ---
   // Non destructif : on génère un aperçu, et le remplacement n'a lieu qu'après confirmation.
@@ -2399,6 +2420,51 @@ export default function App() {
               <div>
                 <div className="section-title">État retour — zone par zone</div>
 
+                {/* ═══ CORRECTION DES INFORMATIONS DU DOSSIER (fautes de frappe) ═══ */}
+                <div className="zone-row" style={{marginBottom:14}}>
+                  <div className="zone-header" onClick={()=>setShowInfoEdit(!showInfoEdit)}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{color:"var(--primary)",fontSize:16,width:24}}>✏</span>
+                      <span style={{fontWeight:600}}>Corriger les informations</span>
+                      <span style={{fontSize:11,color:"var(--muted)"}}>— immat, kilométrages, heures, client...</span>
+                    </div>
+                    <span style={{color:"var(--muted)"}}>{showInfoEdit?"▲":"▼"}</span>
+                  </div>
+                  {showInfoEdit&&(
+                    <div className="zone-body">
+                      <div className="g3" style={{marginBottom:12}}>
+                        <div><label>Immatriculation</label>
+                          <input value={foundDossier.immat||""} onChange={e=>{const v=normalizeImmat(e.target.value);setFoundDossier(prev=>({...prev,_renamedFrom:prev._renamedFrom??prev.immat,immat:v,info:{...prev.info,immat:v}}));setRetForm(f=>({...f,immat:v}));}}/>
+                          {foundDossier._renamedFrom&&foundDossier._renamedFrom!==foundDossier.immat&&<div style={{fontSize:10,color:"var(--accent)",marginTop:3}}>⚠ Correction : {foundDossier._renamedFrom} → {foundDossier.immat}. Appliquée à la validation finale. Si la machine était déjà dans Delta VO, l'ancienne fiche devra y être supprimée.</div>}
+                        </div>
+                        <div><label>N° de cube</label><input value={retForm.numero_cube||""} onChange={e=>{const v=e.target.value.toUpperCase();setRetForm(f=>({...f,numero_cube:v}));setFoundDossier(prev=>({...prev,info:{...prev.info,numero_cube:v}}));}}/></div>
+                        <div><label>Contrat</label><input value={foundDossier.info?.contrat||""} onChange={e=>setFoundDossier(prev=>({...prev,info:{...prev.info,contrat:e.target.value}}))}/></div>
+                      </div>
+                      <div className="g3" style={{marginBottom:12}}>
+                        <div><label>Client</label><input value={foundDossier.info?.client||""} onChange={e=>setFoundDossier(prev=>({...prev,info:{...prev.info,client:e.target.value}}))}/></div>
+                        <div><label>Email client</label><input type="email" value={foundDossier.info?.email||""} onChange={e=>{setFoundDossier(prev=>({...prev,info:{...prev.info,email:e.target.value}}));setEmailClient(e.target.value);}}/></div>
+                        <div><label>Type nacelle</label><input value={foundDossier.info?.type_nacelle||""} onChange={e=>setFoundDossier(prev=>({...prev,info:{...prev.info,type_nacelle:e.target.value}}))}/></div>
+                      </div>
+                      <div className="g3" style={{marginBottom:12}}>
+                        <div><label>Modèle porteur</label><input value={foundDossier.info?.modele||""} onChange={e=>setFoundDossier(prev=>({...prev,info:{...prev.info,modele:e.target.value}}))}/></div>
+                        <div><label>Mise en circulation (année)</label><input type="number" value={foundDossier.info?.annee_fab||""} onChange={e=>setFoundDossier(prev=>({...prev,info:{...prev.info,annee_fab:e.target.value}}))}/></div>
+                        <div><label>Date retour</label><input type="date" value={retForm.date||""} onChange={e=>setRetForm(f=>({...f,date:e.target.value}))}/></div>
+                      </div>
+                      <div className="g3" style={{marginBottom:12}}>
+                        <div><label>Heures nacelle départ</label><input type="number" value={foundDossier.depart?.heures||""} onChange={e=>setFoundDossier(prev=>({...prev,depart:{...prev.depart,heures:e.target.value}}))}/></div>
+                        <div><label>Heures nacelle retour</label><input type="number" value={retForm.heures||""} onChange={e=>setRetForm(f=>({...f,heures:e.target.value}))}/></div>
+                        <div><label>Agent expert retour</label><input value={retForm.agent||""} onChange={e=>setRetForm(f=>({...f,agent:e.target.value}))}/></div>
+                      </div>
+                      <div className="g3">
+                        <div><label>Km porteur départ</label><input type="number" value={foundDossier.depart?.km_porteur||""} onChange={e=>setFoundDossier(prev=>({...prev,depart:{...prev.depart,km_porteur:e.target.value}}))}/></div>
+                        <div><label>Km porteur retour</label><input type="number" value={retForm.km_porteur||""} onChange={e=>setRetForm(f=>({...f,km_porteur:e.target.value}))}/></div>
+                        <div/>
+                      </div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:10}}>Les corrections sont enregistrées à la validation finale de l'expertise (bouton "✓ Confirmer").</div>
+                    </div>
+                  )}
+                </div>
+
                 {/* ═══ IMPORT EN LOT + TRI DES PHOTOS ═══ */}
                 <div className="card" style={{marginBottom:14,border:"2px dashed var(--border2)",background:"#f8f9fb"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
@@ -2696,6 +2762,7 @@ export default function App() {
                     try {
                       const hadRetour = !!foundDossier?.retour; // re-validation après modification ?
                       const d=await saveRetour();
+                      if(!d) return; // sauvegarde refusée (ex: conflit d'immatriculation) — on reste sur l'écran
                       clearDraft("retour");
                       setActiveDossier(d);
                       setView("rapport");
