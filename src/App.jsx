@@ -10,6 +10,50 @@ const EMAIL_CC = "assistanat.commerce@delta-services.fr";
 const REMOVE_BG_KEY = "EwW4qNTWQbKeGVs1GaQkiX3W";
 const APP_URL = "https://nacelle-expert2.vercel.app"; // production — utilisé pour les liens courts /api/rapport
 
+// ─── Alerte automatique par email à la validation d'une expertise retour ───
+// L'envoi est fait CÔTÉ SERVEUR par la fonction Vercel /api/notify-rapport
+// (destinataires fixes définis dans api/notify-rapport.js, envoi via Gmail).
+// Silencieux en cas d'échec : ne bloque jamais la sauvegarde de l'expertise.
+async function notifyRapportExpertise(dossier, tarifs, isUpdate) {
+  if (!dossier?.immat) return;
+  try {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) { console.warn("📧 Alerte rapport non envoyée (utilisateur non authentifié)"); return; }
+    const vt = getVetuste(dossier.info?.annee_fab);
+    const total = (dossier.retour?.degats || []).reduce((s, id) => {
+      const t = tarifs.find(t => t.id === id);
+      if (!t || t.surDevis || !t.prix) return s;
+      return s + prixAvecVetuste(t.prix, vt) * (dossier.retour?.quantites?.[id] || 1);
+    }, 0);
+    const surDevis = (dossier.retour?.degats || []).some(id => tarifs.find(t => t.id === id)?.surDevis);
+    const resp = await fetch("/api/notify-rapport", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+      body: JSON.stringify({
+        immat: dossier.immat,
+        modele: dossier.info?.modele || "—",
+        type_nacelle: dossier.info?.type_nacelle || "—",
+        client: dossier.info?.client || "—",
+        contrat: dossier.info?.contrat || "—",
+        date_retour: dossier.retour?.date || new Date().toISOString().slice(0, 10),
+        agent: dossier.retour?.agent || "—",
+        nb_degats: String((dossier.retour?.degats || []).length),
+        total_retenue: total.toLocaleString("fr-FR") + " € HT" + (surDevis ? " (+ postes sur devis)" : ""),
+        type_envoi: isUpdate ? "Rapport d'expertise mis à jour" : "Nouvelle expertise retour",
+        lien_rapport: `${APP_URL}/api/rapport/${dossier.immat}`,
+      }),
+    });
+    if (!resp.ok) {
+      const t = await resp.text();
+      console.error("❌ Alerte rapport :", resp.status, t);
+    } else {
+      console.log("📧 Alerte rapport envoyée aux destinataires");
+    }
+  } catch (e) {
+    console.error("notifyRapportExpertise:", e);
+  }
+}
+
 // Normalise une immatriculation au format SIV "AB-123-CD" (majuscules, tirets)
 // dès que la saisie correspond au motif 2 lettres + 3 chiffres + 2 lettres,
 // quels que soient les séparateurs tapés (espaces, points, rien...).
@@ -2650,10 +2694,13 @@ export default function App() {
                   <button className="btn btn-gold" disabled={uploadingCount > 0 || savingRetour} onClick={async()=>{
                     setSavingRetour(true);
                     try {
+                      const hadRetour = !!foundDossier?.retour; // re-validation après modification ?
                       const d=await saveRetour();
                       clearDraft("retour");
                       setActiveDossier(d);
                       setView("rapport");
+                      // Alerte automatique aux destinataires fixes (avec lien du rapport) — non bloquant
+                      if(d) notifyRapportExpertise(d, tarifs, hadRetour);
                     } finally {
                       setSavingRetour(false);
                     }
