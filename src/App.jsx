@@ -953,6 +953,8 @@ export default function App() {
   const [searchDone,setSearchDone]=useState(false);
   const [venteImmat,setVenteImmat]=useState("");         // onglet Photos de ventes — immat recherchée
   const [venteSearchDone,setVenteSearchDone]=useState(false);
+  // Photos de ventes "libres" (sans dossier d'expertise) — collection Firestore photos_ventes/{IMMAT}
+  const [ventePhotosLibres,setVentePhotosLibres]=useState({});
   const [lightboxUrl,setLightboxUrl]=useState(null);     // photo affichée en grand (clic pour agrandir)
   const [rotatingKey,setRotatingKey]=useState(null);     // vignette en cours de rotation manuelle
   const [depTriPhoto,setDepTriPhoto]=useState(null);     // photo du bac départ en cours d'affectation
@@ -1610,15 +1612,31 @@ export default function App() {
     return await getDownloadURL(storageRef);
   }
 
-  // Capture d'une photo de ventes (après expertise). Extérieures détourées Pro+, habitacles brutes.
-  // Stockée dans retour.commercialPhotos[slot.key] et repasse le dossier en synced_to_delta_vo:false.
+  // Recherche dans l'onglet Photos de ventes : charge le dossier s'il existe
+  // ET les photos de ventes "libres" déjà prises pour cette immat (collection photos_ventes).
+  async function searchVente() {
+    const im = (venteImmat||"").trim().toUpperCase();
+    if(!im) return;
+    setActiveDossier(dossiers[im]||null);
+    setVentePhotosLibres({});
+    setVenteSearchDone(true);
+    try {
+      const snap = await getDoc(doc(db,"photos_ventes",im));
+      if(snap.exists()) setVentePhotosLibres(snap.data().photos||{});
+    } catch(e) { console.error("Lecture photos_ventes:", e); }
+  }
+
+  // Capture d'une photo de ventes. Extérieures détourées Pro+, habitacles brutes.
+  // FONCTIONNE MÊME SANS DOSSIER D'EXPERTISE : les photos sont toujours écrites dans
+  // la collection photos_ventes/{IMMAT} (lue par Delta VO), et EN PLUS dans
+  // retour.commercialPhotos si un dossier existe (compat + resync Delta VO).
   async function captureVentePhoto(slot) {
-    if(!activeDossier?.immat) return;
+    const immat = (activeDossier?.immat || venteImmat || "").trim().toUpperCase();
+    if(!immat) return;
     const picked = await pickFile({multiple:false});
     if(!picked) return;
     const file = Array.from(picked)[0];
     if(!file) return;
-    const immat = activeDossier.immat;
     setVenteBusy(slot.key);
     try {
       let url = null;
@@ -1633,18 +1651,32 @@ export default function App() {
         url = await uploadVenteRaw(file, immat, slot.key);
       }
       if(!url) return; // une alerte a déjà été affichée en cas d'échec d'upload
-      const updated = {
-        ...activeDossier,
-        retour: {
-          ...(activeDossier.retour||{}),
-          commercialPhotos: { ...(activeDossier.retour?.commercialPhotos||{}), [slot.key]: { url, type:"storage" } }
-        },
-        synced_to_delta_vo: false,
-        updatedAt: new Date().toISOString()
-      };
-      await fbSaveDossier(updated);
-      setDossiers(prev=>({...prev,[updated.immat]:updated}));
-      setActiveDossier(updated);
+
+      // 1) TOUJOURS : collection dédiée photos_ventes/{IMMAT} — c'est elle que lit
+      //    Delta VO, avec ou sans dossier d'expertise.
+      await setDoc(doc(db,"photos_ventes",immat), {
+        immat,
+        photos: { [slot.key]: { url, type:"storage" } },
+        updatedAt: new Date().toISOString(),
+        updatedBy: userProfile ? `${userProfile.prenom} ${userProfile.nom}` : (currentUser?.email||"")
+      }, { merge:true });
+      setVentePhotosLibres(prev=>({ ...prev, [slot.key]: { url, type:"storage" } }));
+
+      // 2) SI un dossier existe : mise à jour classique (rapport + resynchronisation)
+      if(activeDossier?.immat) {
+        const updated = {
+          ...activeDossier,
+          retour: {
+            ...(activeDossier.retour||{}),
+            commercialPhotos: { ...(activeDossier.retour?.commercialPhotos||{}), [slot.key]: { url, type:"storage" } }
+          },
+          synced_to_delta_vo: false,
+          updatedAt: new Date().toISOString()
+        };
+        await fbSaveDossier(updated);
+        setDossiers(prev=>({...prev,[updated.immat]:updated}));
+        setActiveDossier(updated);
+      }
     } catch(e) {
       console.error("Photo de ventes:", e);
       alert("Erreur photo de ventes : " + e.message);
@@ -1735,7 +1767,7 @@ export default function App() {
           )}
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={()=>{setAdminOpen(true);setAdminAuthed(false);setAdminPwd("");}}>⚙</button>
           {view==="home"&&<>
-            <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("ventes");setActiveDossier(null);setVenteImmat("");setVenteSearchDone(false);}}>📷 Photos de ventes</button>
+            <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("ventes");setActiveDossier(null);setVenteImmat("");setVenteSearchDone(false);setVentePhotosLibres({});}}>📷 Photos de ventes</button>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>Expertise Retour</button>
             <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});setDepSignature(null);}}>+ Nouveau départ</button>
           </>}
@@ -2801,51 +2833,51 @@ export default function App() {
             <div className="card" style={{marginBottom:14}}>
               <label>Immatriculation nacelle</label>
               <div style={{display:"flex",gap:8}}>
-                <input value={venteImmat} onChange={e=>{setVenteImmat(normalizeImmat(e.target.value));setVenteSearchDone(false);}} placeholder="AB-123-CD" style={{flex:1}} onKeyDown={e=>{if(e.key==="Enter"){setActiveDossier(dossiers[venteImmat]||null);setVenteSearchDone(true);}}}/>
-                <button className="btn btn-gold" onClick={()=>{setActiveDossier(dossiers[venteImmat]||null);setVenteSearchDone(true);}}>Rechercher</button>
+                <input value={venteImmat} onChange={e=>{setVenteImmat(normalizeImmat(e.target.value));setVenteSearchDone(false);}} placeholder="AB-123-CD" style={{flex:1}} onKeyDown={e=>{if(e.key==="Enter"){searchVente();}}}/>
+                <button className="btn btn-gold" onClick={searchVente}>Rechercher</button>
               </div>
             </div>
             {venteSearchDone&&!activeDossier&&(
-              <div style={{color:"var(--accent)",fontSize:13,padding:"10px 14px",border:"1px solid rgba(200,16,46,.3)",background:"rgba(200,16,46,.06)",marginBottom:14}}>
-                Aucun dossier pour « {venteImmat} »
+              <div style={{fontSize:13,padding:"10px 14px",border:"1px solid rgba(26,42,110,.25)",background:"rgba(26,42,110,.05)",color:"var(--primary)",marginBottom:14}}>
+                ℹ Aucun dossier d'expertise pour « {venteImmat} » — <b>mode libre</b> : vous pouvez quand même prendre les photos de ventes, elles seront envoyées à Delta VO avec cette immatriculation.
               </div>
             )}
             {venteSearchDone&&activeDossier&&!activeDossier.retour&&(
               <div style={{color:"var(--accent)",fontSize:13,padding:"10px 14px",border:"1px solid rgba(200,16,46,.3)",background:"rgba(200,16,46,.06)",marginBottom:14}}>
-                ⚠ L'expertise retour de « {activeDossier.immat} » n'a pas encore été réalisée. Les photos de ventes se prennent après l'expertise.
+                ⚠ L'expertise retour de « {activeDossier.immat} » n'a pas encore été réalisée. Vous pouvez quand même prendre les photos de ventes : elles partiront vers Delta VO.
               </div>
             )}
             {venteSearchDone&&activeDossier&&activeDossier.retour&&(
-              <div>
-                <div className="card" style={{marginBottom:14,border:"2px solid var(--primary)"}}>
-                  <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:10,fontWeight:700}}>Dossier trouvé</div>
-                  <div className="g3">
-                    {[["Immatriculation",activeDossier.immat],["Type nacelle",activeDossier.info?.type_nacelle],["Modèle porteur",activeDossier.info?.modele],["Client",activeDossier.info?.client],["Contrat",activeDossier.info?.contrat],["Date retour",activeDossier.retour?.date]].map(([k,v])=>(
-                      <div key={k}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
-                    ))}
-                  </div>
+              <div className="card" style={{marginBottom:14,border:"2px solid var(--primary)"}}>
+                <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:10,fontWeight:700}}>Dossier trouvé</div>
+                <div className="g3">
+                  {[["Immatriculation",activeDossier.immat],["Type nacelle",activeDossier.info?.type_nacelle],["Modèle porteur",activeDossier.info?.modele],["Client",activeDossier.info?.client],["Contrat",activeDossier.info?.contrat],["Date retour",activeDossier.retour?.date]].map(([k,v])=>(
+                    <div key={k}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
+                  ))}
                 </div>
-                <div className="card">
-                  <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:8}}>Photos de ventes</div>
-                  <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>Les 2 vues extérieures sont détourées automatiquement (logo + immat), les habitacles restent brutes. Ces 4 photos partent vers Delta VO pour la fiche de ventes.</div>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
-                    {VENTE_SLOTS.map(slot=>{
-                      const current=activeDossier.retour?.commercialPhotos?.[slot.key];
-                      const currentUrl=current?(typeof current==="object"?current.url:current):null;
-                      const busy=venteBusy===slot.key;
-                      return (
-                        <div key={slot.key} style={{border:"1px solid var(--border)",padding:8,width:152}}>
-                          <div style={{fontSize:10,fontWeight:600,marginBottom:6}}>{slot.label}{slot.detour&&<span style={{color:"var(--accent)"}}> · Pro+</span>}</div>
-                          {currentUrl?(
-                            <img src={currentUrl} alt="" style={{width:"100%",height:104,objectFit:"contain",background:"#f0f2f5"}}/>
-                          ):(
-                            <div style={{width:"100%",height:104,background:"#f0f2f5",border:"1px dashed var(--border2)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--muted)",fontSize:24}}>+</div>
-                          )}
-                          <button className={currentUrl?"btn btn-outline btn-sm":"btn btn-blue btn-sm"} style={{marginTop:6,width:"100%"}} disabled={busy} onClick={()=>captureVentePhoto(slot)}>{busy?(slot.detour?"Détourage…":"Envoi…"):(currentUrl?"↻ Reprendre":"📷 Prendre")}</button>
-                        </div>
-                      );
-                    })}
-                  </div>
+              </div>
+            )}
+            {venteSearchDone&&venteImmat.trim()&&(
+              <div className="card">
+                <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:8}}>Photos de ventes — {venteImmat}</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>Les 2 vues extérieures sont détourées automatiquement (logo + immat), les habitacles restent brutes. Ces 4 photos partent vers Delta VO pour la fiche de ventes.</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
+                  {VENTE_SLOTS.map(slot=>{
+                    const current=activeDossier?.retour?.commercialPhotos?.[slot.key]||ventePhotosLibres[slot.key];
+                    const currentUrl=current?(typeof current==="object"?current.url:current):null;
+                    const busy=venteBusy===slot.key;
+                    return (
+                      <div key={slot.key} style={{border:"1px solid var(--border)",padding:8,width:152}}>
+                        <div style={{fontSize:10,fontWeight:600,marginBottom:6}}>{slot.label}{slot.detour&&<span style={{color:"var(--accent)"}}> · Pro+</span>}</div>
+                        {currentUrl?(
+                          <img src={currentUrl} alt="" style={{width:"100%",height:104,objectFit:"contain",background:"#f0f2f5",cursor:"zoom-in"}} onClick={()=>setLightboxUrl(currentUrl)}/>
+                        ):(
+                          <div style={{width:"100%",height:104,background:"#f0f2f5",border:"1px dashed var(--border2)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--muted)",fontSize:24}}>+</div>
+                        )}
+                        <button className={currentUrl?"btn btn-outline btn-sm":"btn btn-blue btn-sm"} style={{marginTop:6,width:"100%"}} disabled={busy} onClick={()=>captureVentePhoto(slot)}>{busy?(slot.detour?"Détourage…":"Envoi…"):(currentUrl?"↻ Reprendre":"📷 Prendre")}</button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
