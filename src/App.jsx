@@ -428,23 +428,47 @@ function pickFile(opts={}) {
     inp.click();
   });
 }
+// ─── Détection : createImageBitmap applique-t-il vraiment l'orientation EXIF ? ───
+// ⚠ Sur certains navigateurs (Chrome/WebView Android selon versions), createImageBitmap
+// IGNORE silencieusement l'option {imageOrientation:"from-image"} : la photo compressée
+// ressort couchée (bug constaté sur le terrain le 31/07). On teste UNE FOIS avec une
+// image 2×1 portant une étiquette EXIF "rotation 90°" : si le bitmap ressort en 1×2,
+// l'orientation est bien appliquée ; sinon on passe par la voie <img>, qui applique
+// l'EXIF nativement sur tous les navigateurs modernes.
+const EXIF_TEST_IMG = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAAABAAYAAAAAAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCAABAAIDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDlaKKK+dP2Y//Z";
+let _bitmapExifOk = null;
+async function bitmapHonorsExif() {
+  if (_bitmapExifOk !== null) return _bitmapExifOk;
+  try {
+    const blob = await (await fetch(EXIF_TEST_IMG)).blob();
+    const bmp = await createImageBitmap(blob, { imageOrientation: "from-image" });
+    _bitmapExifOk = (bmp.width === 1 && bmp.height === 2);
+    if (bmp.close) bmp.close();
+    console.log(_bitmapExifOk ? "✅ createImageBitmap applique l'EXIF" : "⚠ createImageBitmap ignore l'EXIF → voie <img>");
+  } catch(e) {
+    _bitmapExifOk = false;
+    console.warn("createImageBitmap indisponible → voie <img>:", e);
+  }
+  return _bitmapExifOk;
+}
+
 async function compressBase64(base64,maxW=800,quality=0.7) {
   // ─── Redressement EXIF ───
-  // Les téléphones enregistrent souvent les pixels "couchés" + une étiquette EXIF
-  // indiquant la rotation à appliquer. createImageBitmap({imageOrientation:"from-image"})
-  // applique cette rotation de façon fiable : la photo compressée est définitivement
-  // droite, quel que soit le sens du téléphone à la prise de vue.
+  // Voie 1 : createImageBitmap, UNIQUEMENT si le test ci-dessus confirme que
+  // l'orientation EXIF est réellement appliquée par ce navigateur.
   try {
-    const blob = await (await fetch(base64)).blob();
-    const bmp = await createImageBitmap(blob, { imageOrientation: "from-image" });
-    const c=document.createElement("canvas");
-    const r=Math.min(maxW/bmp.width,maxW/bmp.height,1);
-    c.width=Math.round(bmp.width*r); c.height=Math.round(bmp.height*r);
-    c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);
-    bmp.close();
-    return c.toDataURL("image/jpeg",quality);
+    if (await bitmapHonorsExif()) {
+      const blob = await (await fetch(base64)).blob();
+      const bmp = await createImageBitmap(blob, { imageOrientation: "from-image" });
+      const c=document.createElement("canvas");
+      const r=Math.min(maxW/bmp.width,maxW/bmp.height,1);
+      c.width=Math.round(bmp.width*r); c.height=Math.round(bmp.height*r);
+      c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);
+      if (bmp.close) bmp.close();
+      return c.toDataURL("image/jpeg",quality);
+    }
   } catch(e) {
-    console.warn("createImageBitmap indisponible, bascule sur la voie classique:", e);
+    console.warn("createImageBitmap en échec, bascule sur la voie <img>:", e);
   }
   // Voie classique (navigateurs anciens) — les navigateurs récents appliquent
   // aussi l'orientation EXIF lors du drawImage depuis un élément <img>.
