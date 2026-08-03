@@ -67,6 +67,7 @@ export default async function handler(req, res) {
       row("Modèle", `${esc(b.modele)} — ${esc(b.type_nacelle)}`, true) +
       row("Client", `${esc(b.client)} (contrat ${esc(b.contrat)})`) +
       row("Date retour", esc(b.date_retour), true) +
+      row("Lieu de restitution", esc(b.lieu_restitution)) +
       row("Expert", esc(b.agent)) +
       row("Dégâts constatés", esc(b.nb_degats), true) +
       row("Total retenue", `<b style="color:#c8102e;">${esc(b.total_retenue)}</b>`) +
