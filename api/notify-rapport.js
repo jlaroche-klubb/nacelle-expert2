@@ -18,13 +18,11 @@ if (!admin.apps.length) {
 }
 
 // Destinataires fixes de l'alerte (côté serveur : non modifiable depuis le navigateur)
+// ⚠ PHASE DE TEST : envoi à Jonathan uniquement. Une fois validé, rétablir la liste complète :
+// nneguy@klubb.com, gcloarec@delta-services.fr, bbenavente@delta-services.fr,
+// anebotsaudin@delta-services.fr, rbourdin@delta-services.fr, jbessadet@delta-services.fr
 const RECIPIENTS = [
-  "nneguy@klubb.com",
-  "gcloarec@delta-services.fr",
-  "bbenavente@delta-services.fr",
-  "anebotsaudin@delta-services.fr",
-  "rbourdin@delta-services.fr",
-  "jbessadet@delta-services.fr",
+  "jlaroche@klubb.com",
 ];
 
 export default async function handler(req, res) {
