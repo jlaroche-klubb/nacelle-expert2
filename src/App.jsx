@@ -71,6 +71,38 @@ function normalizeImmat(raw) {
 // Lieux de restitution autorisés (champ OBLIGATOIRE de l'expertise retour)
 const LIEUX_RESTITUTION = ["EGI", "Ferrières", "Avignon", "St Alban"];
 
+// Types de nacelle par défaut — liste modifiable dans le panneau ADMIN (onglet "Types nacelle"),
+// stockée dans Firestore (config/types_nacelle). "AUTRE" est ajouté automatiquement au menu
+// et ouvre un champ de saisie libre.
+const DEFAULT_TYPES_NACELLE = ["KL 32", "KL26 TRQ", "KL26 CC", "KL 21B", "KL 38P", "KL 38P TRQ", "KL 42P", "KL 17P"];
+
+// Menu déroulant "Type nacelle" avec option AUTRE → saisie libre
+function TypeNacelleSelect({ value, onChange, types }) {
+  const inList = !!value && types.includes(value);
+  const [autre, setAutre] = useState(!!value && !types.includes(value));
+  useEffect(() => {
+    if (value && types.includes(value)) setAutre(false);
+    else if (value && !types.includes(value)) setAutre(true);
+  }, [value, types]);
+  return (
+    <div>
+      <select
+        value={autre ? "__AUTRE__" : (inList ? value : "")}
+        onChange={e => {
+          const v = e.target.value;
+          if (v === "__AUTRE__") { setAutre(true); onChange(""); }
+          else { setAutre(false); onChange(v); }
+        }}
+      >
+        <option value="">-- Sélectionner --</option>
+        {types.map(t => <option key={t} value={t}>{t}</option>)}
+        <option value="__AUTRE__">AUTRE</option>
+      </select>
+      {autre && <input value={value || ""} onChange={e => onChange(e.target.value)} placeholder="Saisir le type de nacelle..." style={{ marginTop: 6 }} autoFocus />}
+    </div>
+  );
+}
+
 const VENTE_SLOTS = [
   { key: "vente_3_4_av_droit", label: "3/4 avant droit", detour: true },
   { key: "vente_3_4_ar_gauche", label: "3/4 arrière gauche", detour: true },
@@ -891,6 +923,8 @@ export default function App() {
   const [dossiers,setDossiers]=useState({});
   const [zones,setZones]=useState(DEFAULT_ZONES);
   const [tarifs,setTarifs]=useState(DEFAULT_TARIFS);
+  const [typesNacelle,setTypesNacelle]=useState(DEFAULT_TYPES_NACELLE);
+  const [typeNacForm,setTypeNacForm]=useState(""); // saisie admin d'un nouveau type
   const [loading,setLoading]=useState(true);
   const [searchQ,setSearchQ]=useState("");
   const [filterStatut,setFilterStatut]=useState("tous"); // tous | location | retour | sans_depart
@@ -1192,6 +1226,7 @@ export default function App() {
     try {
       const snap=await getDocs(collection(db,"dossiers")); const result={}; snap.docs.forEach(d=>{result[d.id]=d.data();}); setDossiers(result);
       const zC=await fbGetConfig("zones"); if(zC?.data) setZones(zC.data);
+      const tnC=await fbGetConfig("types_nacelle"); if(tnC?.data?.length) setTypesNacelle(tnC.data);
       const tC=await fbGetConfig("tarifs");
       if(tC?.data){
         const loaded=tC.data;
@@ -2008,7 +2043,7 @@ export default function App() {
                 <div className="card" style={{marginBottom:14}}>
                   <div className="g3" style={{marginBottom:12}}>
                     <div><label>Immatriculation *</label><input value={depForm.immat} onChange={e=>setDepForm({...depForm,immat:normalizeImmat(e.target.value)})} placeholder="AB-123-CD"/></div>
-                    <div><label>Type nacelle</label><input value={depForm.type_nacelle} onChange={e=>setDepForm({...depForm,type_nacelle:e.target.value})} placeholder="KL32/PT160/KL21/TARRIERE"/></div>
+                    <div><label>Type nacelle</label><TypeNacelleSelect value={depForm.type_nacelle} onChange={v=>setDepForm({...depForm,type_nacelle:v})} types={typesNacelle}/></div>
                     <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
                   </div>
                   <div className="g3" style={{marginBottom:12}}>
@@ -2369,7 +2404,7 @@ export default function App() {
                   
                   <div className="g2" style={{marginBottom:12}}>
                     <div><label>N° de cube *</label><input value={retForm.numero_cube||""} onChange={e=>setRetForm({...retForm,numero_cube:e.target.value.toUpperCase()})} placeholder="Ex : C12345"/></div>
-                    <div><label>Type nacelle *</label><input value={retForm.type_nacelle||""} onChange={e=>setRetForm({...retForm,type_nacelle:e.target.value})} placeholder="KL32/PT160/KL21/TARRIERE"/></div>
+                    <div><label>Type nacelle *</label><TypeNacelleSelect value={retForm.type_nacelle||""} onChange={v=>setRetForm(f=>({...f,type_nacelle:v}))} types={typesNacelle}/></div>
                   </div>
                   
                   <div className="g2" style={{marginBottom:12}}>
@@ -2489,7 +2524,7 @@ export default function App() {
                       <div className="g3" style={{marginBottom:12}}>
                         <div><label>Client</label><input value={foundDossier.info?.client||""} onChange={e=>setFoundDossier(prev=>({...prev,info:{...prev.info,client:e.target.value}}))}/></div>
                         <div><label>Email client</label><input type="email" value={foundDossier.info?.email||""} onChange={e=>{setFoundDossier(prev=>({...prev,info:{...prev.info,email:e.target.value}}));setEmailClient(e.target.value);}}/></div>
-                        <div><label>Type nacelle</label><input value={foundDossier.info?.type_nacelle||""} onChange={e=>setFoundDossier(prev=>({...prev,info:{...prev.info,type_nacelle:e.target.value}}))}/></div>
+                        <div><label>Type nacelle</label><TypeNacelleSelect value={foundDossier.info?.type_nacelle||""} onChange={v=>setFoundDossier(prev=>({...prev,info:{...prev.info,type_nacelle:v}}))} types={typesNacelle}/></div>
                       </div>
                       <div className="g3" style={{marginBottom:12}}>
                         <div><label>Modèle porteur</label><input value={foundDossier.info?.modele||""} onChange={e=>setFoundDossier(prev=>({...prev,info:{...prev.info,modele:e.target.value}}))}/></div>
@@ -3091,7 +3126,7 @@ export default function App() {
                   <button className="btn btn-icon" onClick={()=>{setAdminOpen(false);setAdminAuthed(false);}}>✕</button>
                 </div>
                 <div style={{display:"flex",borderBottom:"2px solid var(--primary)",marginBottom:18}}>
-                  {[[" zones","Zones"],["tarifs","Postes tarifaires"],["dossiers","Dossiers"],["users","Utilisateurs"]].map(([id,label])=>(<div key={id} className={`tab ${adminTab===id?"active":""}`} onClick={()=>{setAdminTab(id);setZoneEdit(null);setTarifEdit(null);loadUsers();}}>{label}</div>))}
+                  {[[" zones","Zones"],["tarifs","Postes tarifaires"],["types","Types nacelle"],["dossiers","Dossiers"],["users","Utilisateurs"]].map(([id,label])=>(<div key={id} className={`tab ${adminTab===id?"active":""}`} onClick={()=>{setAdminTab(id);setZoneEdit(null);setTarifEdit(null);loadUsers();}}>{label}</div>))}
                 </div>
                 {adminMsg&&<div style={{padding:"8px 12px",background:"rgba(48,160,80,.1)",color:"#208040",border:"1px solid rgba(48,160,80,.3)",fontSize:13,marginBottom:14}}>{adminMsg}</div>}
                 {adminTab==="zones"&&(
@@ -3103,6 +3138,31 @@ export default function App() {
                       <label>Icône</label>
                       <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:6,marginBottom:12}}>{ICONS.map(ic=><div key={ic} className={`icon-btn ${zoneForm.icon===ic?"sel":""}`} onClick={()=>setZoneForm({...zoneForm,icon:ic})}>{ic}</div>)}</div>
                       <div style={{display:"flex",gap:8}}>{zoneEdit!==null&&<button className="btn btn-outline btn-sm" onClick={()=>{setZoneEdit(null);setZoneForm({label:"",icon:"⟋"});}}>Annuler</button>}<button className="btn btn-gold btn-sm" disabled={!zoneForm.label.trim()} onClick={saveZone}>{zoneEdit!==null?"Enregistrer":"Ajouter"}</button></div>
+                    </div>
+                  </div>
+                )}
+                {adminTab==="types"&&(
+                  <div>
+                    <div style={{fontSize:12,color:"var(--muted)",marginBottom:12,lineHeight:1.5}}>
+                      Cette liste alimente le menu déroulant « Type nacelle » (départ, retour, corrections). L'option <b>AUTRE</b> (saisie libre) est toujours présente automatiquement.
+                    </div>
+                    {typesNacelle.map((t,i)=>(
+                      <div key={t+i} className="admin-row">
+                        <span style={{fontWeight:600}}>{t}</span>
+                        <div style={{display:"flex",gap:4}}>
+                          <button className="btn btn-icon" title="Monter" disabled={i===0} onClick={async()=>{const u=[...typesNacelle];[u[i-1],u[i]]=[u[i],u[i-1]];setTypesNacelle(u);await fbSaveConfig("types_nacelle",{data:u});}}>↑</button>
+                          <button className="btn btn-icon" title="Descendre" disabled={i===typesNacelle.length-1} onClick={async()=>{const u=[...typesNacelle];[u[i+1],u[i]]=[u[i],u[i+1]];setTypesNacelle(u);await fbSaveConfig("types_nacelle",{data:u});}}>↓</button>
+                          <button className="btn btn-icon" style={{color:"var(--danger)"}} onClick={async()=>{if(!window.confirm(`Supprimer « ${t} » de la liste ?\n(Les dossiers existants qui l'utilisent ne sont pas modifiés.)`))return;const u=typesNacelle.filter((_,j)=>j!==i);setTypesNacelle(u);await fbSaveConfig("types_nacelle",{data:u});flash("Type supprimé ✓");}}>🗑</button>
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{marginTop:16,padding:14,border:"1px solid var(--border2)",background:"#f8f9fb"}}>
+                      <div style={{fontSize:11,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:10,fontWeight:700}}>Ajouter un type</div>
+                      <div style={{display:"flex",gap:8}}>
+                        <input value={typeNacForm} onChange={e=>setTypeNacForm(e.target.value)} placeholder="Ex : KL 27" style={{flex:1}} onKeyDown={async e=>{if(e.key==="Enter"&&typeNacForm.trim()&&!typesNacelle.includes(typeNacForm.trim())){const u=[...typesNacelle,typeNacForm.trim()];setTypesNacelle(u);await fbSaveConfig("types_nacelle",{data:u});setTypeNacForm("");flash("Type ajouté ✓");}}}/>
+                        <button className="btn btn-gold btn-sm" disabled={!typeNacForm.trim()||typesNacelle.includes(typeNacForm.trim())} onClick={async()=>{const u=[...typesNacelle,typeNacForm.trim()];setTypesNacelle(u);await fbSaveConfig("types_nacelle",{data:u});setTypeNacForm("");flash("Type ajouté ✓");}}>Ajouter</button>
+                      </div>
+                      {typeNacForm.trim()&&typesNacelle.includes(typeNacForm.trim())&&<div style={{fontSize:11,color:"var(--accent)",marginTop:6}}>Ce type existe déjà dans la liste.</div>}
                     </div>
                   </div>
                 )}
