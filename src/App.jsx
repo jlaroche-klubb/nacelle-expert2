@@ -36,6 +36,7 @@ async function notifyRapportExpertise(dossier, tarifs, isUpdate) {
         client: dossier.info?.client || "—",
         contrat: dossier.info?.contrat || "—",
         date_retour: dossier.retour?.date || new Date().toISOString().slice(0, 10),
+        lieu_restitution: dossier.retour?.lieu_restitution || "—",
         agent: dossier.retour?.agent || "—",
         nb_degats: String((dossier.retour?.degats || []).length),
         total_retenue: total.toLocaleString("fr-FR") + " € HT" + (surDevis ? " (+ postes sur devis)" : ""),
@@ -67,6 +68,9 @@ function normalizeImmat(raw) {
   return s;
 }
 // Photos de ventes (remplies après l'expertise) — détourage Pro+ uniquement sur les 2 extérieures
+// Lieux de restitution autorisés (champ OBLIGATOIRE de l'expertise retour)
+const LIEUX_RESTITUTION = ["EGI", "Ferrières", "Avignon", "St Alban"];
+
 const VENTE_SLOTS = [
   { key: "vente_3_4_av_droit", label: "3/4 avant droit", detour: true },
   { key: "vente_3_4_ar_gauche", label: "3/4 arrière gauche", detour: true },
@@ -1459,6 +1463,7 @@ export default function App() {
       heures: d.retour.heures || "",
       km_porteur: d.retour.km_porteur || "",
       agent: d.retour.agent || (userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""),
+      lieu_restitution: d.retour.lieu_restitution || "",
       immat: d.immat,
       numero_cube: d.info?.numero_cube || "",
       type_nacelle: d.info?.type_nacelle || "",
@@ -1589,6 +1594,7 @@ export default function App() {
         heures:retForm.heures,
         km_porteur:retForm.km_porteur,
         agent:retForm.agent,
+        lieu_restitution:retForm.lieu_restitution||"",
         commercialPhotos:{ ...(foundDossier.retour?.commercialPhotos||{}) }, // préserve les photos de ventes prises via l'onglet dédié
         ...(pdfInfo || {})
       },
@@ -2327,7 +2333,12 @@ export default function App() {
                       </div>
                       <div className="g2" style={{marginBottom:12}}>
                         <div><label>Agent expert</label><input value={retForm.agent} onChange={e=>setRetForm({...retForm,agent:e.target.value})} placeholder="Prénom Nom"/></div>
-                        <div/>
+                        <div><label>Lieu de restitution *</label>
+                          <select value={retForm.lieu_restitution||""} onChange={e=>setRetForm({...retForm,lieu_restitution:e.target.value})}>
+                            <option value="">-- Sélectionner --</option>
+                            {LIEUX_RESTITUTION.map(l=><option key={l}>{l}</option>)}
+                          </select>
+                        </div>
                       </div>
                       <div className="g2">
                         <div><label>Heures nacelle retour</label><input type="number" value={retForm.heures} onChange={e=>setRetForm({...retForm,heures:e.target.value})} placeholder="1 380"/></div>
@@ -2338,7 +2349,8 @@ export default function App() {
                       <button className="btn btn-outline" onClick={()=>{setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>← Annuler</button>
                       <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
                         {!retForm.numero_cube&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Le N° de cube est obligatoire</div>}
-                        <button className="btn btn-gold" disabled={!retForm.numero_cube} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetQtes({});setRetNote("");setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
+                        {!retForm.lieu_restitution&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Le lieu de restitution est obligatoire</div>}
+                        <button className="btn btn-gold" disabled={!retForm.numero_cube||!retForm.lieu_restitution} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetQtes({});setRetNote("");setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
                       </div>
                     </div>
                   </div>
@@ -2380,14 +2392,24 @@ export default function App() {
                     <div><label>Km porteur retour</label><input type="number" value={retForm.km_porteur||""} onChange={e=>setRetForm({...retForm,km_porteur:e.target.value})} placeholder="47 000"/></div>
                   </div>
                   
-                  <div style={{fontSize:11,color:"var(--muted)",marginTop:8}}>* Champs recommandés</div>
+                  <div className="g2" style={{marginBottom:12}}>
+                    <div><label>Lieu de restitution *</label>
+                      <select value={retForm.lieu_restitution||""} onChange={e=>setRetForm({...retForm,lieu_restitution:e.target.value})}>
+                        <option value="">-- Sélectionner --</option>
+                        {LIEUX_RESTITUTION.map(l=><option key={l}>{l}</option>)}
+                      </select>
+                    </div>
+                    <div/>
+                  </div>
+
+                  <div style={{fontSize:11,color:"var(--muted)",marginTop:8}}>* Champs recommandés — le lieu de restitution est obligatoire</div>
                 </div>
                 
                 <div style={{display:"flex",justifyContent:"space-between"}}>
                   <button className="btn btn-outline" onClick={()=>{setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>← Annuler</button>
                   <button 
                     className="btn btn-gold" 
-                    disabled={!retForm.numero_cube || !retForm.type_nacelle || !retForm.modele || !retForm.client}
+                    disabled={!retForm.numero_cube || !retForm.type_nacelle || !retForm.modele || !retForm.client || !retForm.lieu_restitution}
                     onClick={async()=>{
                       // Créer le dossier avec les infos remplies
                       const d={
@@ -2482,7 +2504,12 @@ export default function App() {
                       <div className="g3">
                         <div><label>Km porteur départ</label><input type="number" value={foundDossier.depart?.km_porteur||""} onChange={e=>setFoundDossier(prev=>({...prev,depart:{...prev.depart,km_porteur:e.target.value}}))}/></div>
                         <div><label>Km porteur retour</label><input type="number" value={retForm.km_porteur||""} onChange={e=>setRetForm(f=>({...f,km_porteur:e.target.value}))}/></div>
-                        <div/>
+                        <div><label>Lieu de restitution *</label>
+                          <select value={retForm.lieu_restitution||""} onChange={e=>setRetForm(f=>({...f,lieu_restitution:e.target.value}))}>
+                            <option value="">-- Sélectionner --</option>
+                            {LIEUX_RESTITUTION.map(l=><option key={l}>{l}</option>)}
+                          </select>
+                        </div>
                       </div>
                       <div style={{fontSize:11,color:"var(--muted)",marginTop:10}}>Les corrections sont enregistrées à la validation finale de l'expertise (bouton "✓ Confirmer").</div>
                     </div>
@@ -2719,6 +2746,12 @@ export default function App() {
                 <div style={{display:"flex",justifyContent:"space-between",marginTop:14}}>
                   <button className="btn btn-outline" onClick={()=>setRetStep(0)}>← Retour</button>
                   <button className="btn btn-gold" onClick={()=>{
+                    if(!retForm.lieu_restitution){
+                      alert("⚠ Le lieu de restitution est obligatoire.\n\nRenseignez-le dans le panneau « ✏ Corriger les informations » en haut de la page (EGI, Ferrières, Avignon ou St Alban).");
+                      setShowInfoEdit(true);
+                      window.scrollTo({top:0,behavior:"smooth"});
+                      return;
+                    }
                     const pending=(retPhotos["a_trier"]||[]).length;
                     if(pending>0){
                       if(!window.confirm(`${pending} photo${pending>1?"s":""} importée${pending>1?"s":""} n'${pending>1?"ont":"a"} pas été triée${pending>1?"s":""}.\n\nOK → elle${pending>1?"s":""} sera${pending>1?"ont":""} ajoutée${pending>1?"s":""} aux « Photos supplémentaires »\nAnnuler → revenir pour les trier`)) return;
@@ -2736,7 +2769,7 @@ export default function App() {
                 <div className="card" style={{marginBottom:14,border:"2px solid var(--primary)"}}>
                   <div style={{fontSize:11,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",fontWeight:700,marginBottom:12}}>Récapitulatif</div>
                   <div className="g3" style={{marginBottom:14}}>
-                    {[["Immatriculation",foundDossier.immat],["N° de cube",retForm.numero_cube||foundDossier.info?.numero_cube],["Client",foundDossier.info?.client],["Contrat",foundDossier.info?.contrat],["Date retour",retForm.date],["Heures départ",foundDossier.depart?.heures?foundDossier.depart.heures+" h":"—"],["Heures retour",retForm.heures?retForm.heures+" h":"—"],["Heures utilisées",foundDossier.depart?.heures&&retForm.heures?(parseInt(retForm.heures)-parseInt(foundDossier.depart.heures))+" h":"—"],["Km porteur départ",foundDossier.depart?.km_porteur?foundDossier.depart.km_porteur+" km":"—"],["Km porteur retour",retForm.km_porteur?retForm.km_porteur+" km":"—"],["Km parcourus",foundDossier.depart?.km_porteur&&retForm.km_porteur?(parseInt(retForm.km_porteur)-parseInt(foundDossier.depart.km_porteur))+" km":"—"]].map(([k,v])=>(
+                    {[["Immatriculation",foundDossier.immat],["N° de cube",retForm.numero_cube||foundDossier.info?.numero_cube],["Client",foundDossier.info?.client],["Contrat",foundDossier.info?.contrat],["Date retour",retForm.date],["Lieu de restitution",retForm.lieu_restitution],["Heures départ",foundDossier.depart?.heures?foundDossier.depart.heures+" h":"—"],["Heures retour",retForm.heures?retForm.heures+" h":"—"],["Heures utilisées",foundDossier.depart?.heures&&retForm.heures?(parseInt(retForm.heures)-parseInt(foundDossier.depart.heures))+" h":"—"],["Km porteur départ",foundDossier.depart?.km_porteur?foundDossier.depart.km_porteur+" km":"—"],["Km porteur retour",retForm.km_porteur?retForm.km_porteur+" km":"—"],["Km parcourus",foundDossier.depart?.km_porteur&&retForm.km_porteur?(parseInt(retForm.km_porteur)-parseInt(foundDossier.depart.km_porteur))+" km":"—"]].map(([k,v])=>(
                       <div key={k}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
                     ))}
                   </div>
@@ -2818,7 +2851,7 @@ export default function App() {
             </div>
             <div className="card" style={{marginBottom:10}}>
               <div className="g3">
-                {[["Immatriculation",activeDossier.immat],["Type nacelle",activeDossier.info?.type_nacelle],["Modèle porteur",activeDossier.info?.modele],["Mise en circulation",activeDossier.info?.annee_fab],["Client",activeDossier.info?.client],["Contrat",activeDossier.info?.contrat],["Email",activeDossier.info?.email],["Date départ",activeDossier.depart?.date],["Date retour",activeDossier.retour?.date||"—"],["Durée",activeDossier.depart?.date&&activeDossier.retour?.date?(()=>{const d=Math.round((new Date(activeDossier.retour.date)-new Date(activeDossier.depart.date))/864e5);return d+" jour"+(d>1?"s":"");})():"—"],["Heures départ",activeDossier.depart?.heures?activeDossier.depart.heures+" h":"—"],["Heures retour",activeDossier.retour?.heures?activeDossier.retour.heures+" h":"—"],["Heures utilisées",activeDossier.depart?.heures&&activeDossier.retour?.heures?(parseInt(activeDossier.retour.heures)-parseInt(activeDossier.depart.heures))+" h":"—"],["Km porteur départ",activeDossier.depart?.km_porteur?activeDossier.depart.km_porteur+" km":"—"],["Km porteur retour",activeDossier.retour?.km_porteur?activeDossier.retour.km_porteur+" km":"—"],["Km parcourus",activeDossier.depart?.km_porteur&&activeDossier.retour?.km_porteur?(parseInt(activeDossier.retour.km_porteur)-parseInt(activeDossier.depart.km_porteur))+" km":"—"]].map(([k,v])=>(
+                {[["Immatriculation",activeDossier.immat],["Type nacelle",activeDossier.info?.type_nacelle],["Modèle porteur",activeDossier.info?.modele],["Mise en circulation",activeDossier.info?.annee_fab],["Client",activeDossier.info?.client],["Contrat",activeDossier.info?.contrat],["Email",activeDossier.info?.email],["Date départ",activeDossier.depart?.date],["Date retour",activeDossier.retour?.date||"—"],["Lieu de restitution",activeDossier.retour?.lieu_restitution||"—"],["Durée",activeDossier.depart?.date&&activeDossier.retour?.date?(()=>{const d=Math.round((new Date(activeDossier.retour.date)-new Date(activeDossier.depart.date))/864e5);return d+" jour"+(d>1?"s":"");})():"—"],["Heures départ",activeDossier.depart?.heures?activeDossier.depart.heures+" h":"—"],["Heures retour",activeDossier.retour?.heures?activeDossier.retour.heures+" h":"—"],["Heures utilisées",activeDossier.depart?.heures&&activeDossier.retour?.heures?(parseInt(activeDossier.retour.heures)-parseInt(activeDossier.depart.heures))+" h":"—"],["Km porteur départ",activeDossier.depart?.km_porteur?activeDossier.depart.km_porteur+" km":"—"],["Km porteur retour",activeDossier.retour?.km_porteur?activeDossier.retour.km_porteur+" km":"—"],["Km parcourus",activeDossier.depart?.km_porteur&&activeDossier.retour?.km_porteur?(parseInt(activeDossier.retour.km_porteur)-parseInt(activeDossier.depart.km_porteur))+" km":"—"]].map(([k,v])=>(
                   <div key={k} style={{marginBottom:6}}><div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:2}}>{k}</div><div style={{fontSize:13,fontWeight:600}}>{v||"—"}</div></div>
                 ))}
               </div>
