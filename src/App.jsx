@@ -1568,10 +1568,17 @@ export default function App() {
         alert("⚠ La signature n'a pas pu être enregistrée (" + e.message + ").\nLe dossier sera sauvegardé sans signature.");
       }
     }
+    // ── Préservation des infos ADV (Delta VO) ──
+    // Si un dossier pré-créé existe (infos client/contrat poussées par les
+    // secrétaires depuis Delta VO), ses infos servent de socle : les champs
+    // laissés VIDES dans le formulaire ne les écrasent pas.
+    const depFormRempli = Object.fromEntries(
+      Object.entries(depForm).filter(([,v]) => v !== "" && v != null)
+    );
     const data={
       id:genId(),
       immat:depForm.immat,
-      info:{...depForm},
+      info:{...(previous?.info||{}), ...depFormRempli, immat:depForm.immat},
       // Le bac "a_trier" n'est jamais sauvegardé : les photos non affectées sont abandonnées (confirmées avant validation)
       depart:{zones:depZones,photos:(()=>{ const {a_trier,...rest}=depPhotos; return rest; })(),tests:depTests,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent,...(signatureInfo?{signature_client:signatureInfo}:{})},
       retour:null,
@@ -2042,7 +2049,28 @@ export default function App() {
                 <div className="section-title">Identification nacelle</div>
                 <div className="card" style={{marginBottom:14}}>
                   <div className="g3" style={{marginBottom:12}}>
-                    <div><label>Immatriculation *</label><input value={depForm.immat} onChange={e=>setDepForm({...depForm,immat:normalizeImmat(e.target.value)})} placeholder="AB-123-CD"/></div>
+                    {/* Pré-remplissage automatique : si un dossier existe déjà pour cette immat
+                        (infos ADV poussées par Delta VO, ou cycle précédent), les champs vides
+                        client / contrat / email / modèle... sont remplis automatiquement. */}
+                    <div><label>Immatriculation *</label><input value={depForm.immat} onChange={e=>{
+                      const immat = normalizeImmat(e.target.value);
+                      const existing = dossiers[immat];
+                      if (existing?.info) {
+                        const i = existing.info;
+                        setDepForm(f=>({
+                          ...f, immat,
+                          client: f.client || i.client || "",
+                          contrat: f.contrat || i.contrat || "",
+                          email: f.email || i.email || "",
+                          type_nacelle: f.type_nacelle || i.type_nacelle || "",
+                          modele: f.modele || i.modele || "",
+                          annee_fab: f.annee_fab || i.annee_fab || "",
+                          numero_cube: f.numero_cube || i.numero_cube || "",
+                        }));
+                      } else {
+                        setDepForm(f=>({...f, immat}));
+                      }
+                    }} placeholder="AB-123-CD"/></div>
                     <div><label>Type nacelle</label><TypeNacelleSelect value={depForm.type_nacelle} onChange={v=>setDepForm({...depForm,type_nacelle:v})} types={typesNacelle}/></div>
                     <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
                   </div>
