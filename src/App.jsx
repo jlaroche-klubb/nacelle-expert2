@@ -1700,6 +1700,16 @@ export default function App() {
     }
   }
 
+  // Validation du départ (photos non triées confirmées, sauvegarde, retour accueil)
+  // — factorisée pour être appelée depuis le haut ET le bas de l'écran de rapport.
+  async function validerDepart() {
+    const pending=(depPhotos["a_trier"]||[]).length;
+    if(pending&&!window.confirm(`${pending} photo${pending>1?"s":""} du bac d'import n'${pending>1?"ont":"a"} pas été affectée${pending>1?"s":""} et ser${pending>1?"ont":"a"} abandonnée${pending>1?"s":""}.\n\nValider quand même ?`)) return;
+    await saveDepart();
+    clearDraft("depart");
+    goHome();
+  }
+
   async function saveDepart() {
     // ── Cycles multiples : une nacelle fait des allers-retours départ→retour→départ...
     // Si un cycle complet (départ + retour) existe déjà pour cette immat, on l'ARCHIVE
@@ -2462,7 +2472,7 @@ export default function App() {
                     {depForm.email && (
                       <button className="btn btn-blue btn-sm no-print" disabled={depEmailSending} onClick={sendDepartEmail}>{depEmailSending?"⏳ Envoi…":depEmailSent?"✓ Envoyé — renvoyer":"📧 Envoyer au client"}</button>
                     )}
-                    <button className="btn btn-gold" onClick={async()=>{const pending=(depPhotos["a_trier"]||[]).length; if(pending&&!window.confirm(`${pending} photo${pending>1?"s":""} du bac d'import n'${pending>1?"ont":"a"} pas été affectée${pending>1?"s":""} et ser${pending>1?"ont":"a"} abandonnée${pending>1?"s":""}.\n\nValider quand même ?`)) return; await saveDepart();clearDraft("depart");goHome();}} disabled={!depForm.immat || uploadingCount > 0}>{uploadingCount > 0 ? `⏳ Upload en cours (${uploadingCount})` : "✓ Valider & sauvegarder"}</button>
+                    <button className="btn btn-gold" onClick={validerDepart} disabled={!depForm.immat || uploadingCount > 0}>{uploadingCount > 0 ? `⏳ Upload en cours (${uploadingCount})` : "✓ Valider & sauvegarder"}</button>
                   </div>
                 </div>
                 <div className="card" style={{marginBottom:10}}>
@@ -2523,9 +2533,14 @@ export default function App() {
                   <label>Email client — pour envoi de l'état de départ</label>
                   <input type="email" value={depForm.email} onChange={e=>setDepForm({...depForm,email:e.target.value})} placeholder="client@email.com" style={{marginBottom:8}}/>
                 </div>
-                <div className="no-print" style={{marginTop:10,display:"flex",justifyContent:"space-between",gap:8}}>
+                {/* Barre d'actions FINALE — là où l'expert termine (après la signature) :
+                    envoi du rapport de départ au client, puis validation. */}
+                <div className="no-print" style={{marginTop:14,display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
                   <button className="btn btn-outline" onClick={()=>setDepStep(1)}>← Modifier</button>
-                  <button className="btn btn-gold" onClick={()=>setDepStep(2)}>Prévisualiser →</button>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    <button className="btn btn-blue" disabled={depEmailSending} onClick={sendDepartEmail}>{depEmailSending?"⏳ Envoi…":depEmailSent?"✓ Envoyé — renvoyer":"📧 Envoyer le rapport de départ"}</button>
+                    <button className="btn btn-gold" onClick={validerDepart} disabled={!depForm.immat || uploadingCount > 0}>{uploadingCount > 0 ? `⏳ Upload en cours (${uploadingCount})` : "✓ Valider & sauvegarder"}</button>
+                  </div>
                 </div>
               </div>
             )}
