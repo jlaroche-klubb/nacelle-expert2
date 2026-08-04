@@ -1665,6 +1665,41 @@ export default function App() {
   function setZE(setter,zoneId,etat) { setter(prev=>({...prev,[zoneId]:{...(prev[zoneId]||{}),etat}})); }
   function setZN(setter,zoneId,note) { setter(prev=>({...prev,[zoneId]:{...(prev[zoneId]||{}),note}})); }
 
+  // 📧 Envoi AUTOMATIQUE de l'état de départ au client (serveur → Brevo).
+  // Remplace l'ancien lien mailto: qui dépendait de la messagerie configurée
+  // sur l'appareil de l'expert (source des « emails jamais partis »).
+  async function sendDepartEmail() {
+    const email = (depForm.email||"").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      alert("Renseignez d'abord l'email du client (champ « Email client » de l'identification).");
+      return;
+    }
+    if (depEmailSending) return;
+    setDepEmailSending(true);
+    try {
+      // 1) Publie l'état de départ (page HTML) et active le lien court /depart
+      const htmlContent = captureCurrentPageHTML();
+      const reportUrl = await uploadReportToStorage(htmlContent, depForm.immat, "depart");
+      await setDoc(doc(db, "rapports_links", depForm.immat), { depart_url: reportUrl, updatedAt: new Date().toISOString() }, { merge: true });
+      // 2) Envoi serveur au client (+ copie assistanat commerce)
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error("utilisateur non authentifié");
+      const resp = await fetch("/api/notify-depart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body: JSON.stringify({ immat: depForm.immat, email_client: email, modele: depForm.modele, type_nacelle: depForm.type_nacelle }),
+      });
+      if (!resp.ok) { const t = await resp.json().catch(()=>({})); throw new Error(t.error || ("HTTP " + resp.status)); }
+      setDepEmailSent(true);
+      alert("📧 État de départ envoyé à " + email + " (copie assistanat commerce)");
+    } catch (e) {
+      console.error("Envoi état de départ:", e);
+      alert("⚠ L'envoi automatique a échoué : " + e.message + "\n\nVous pouvez réessayer dans un instant.");
+    } finally {
+      setDepEmailSending(false);
+    }
+  }
+
   async function saveDepart() {
     // ── Cycles multiples : une nacelle fait des allers-retours départ→retour→départ...
     // Si un cycle complet (départ + retour) existe déjà pour cette immat, on l'ARCHIVE
@@ -2425,7 +2460,7 @@ export default function App() {
                   <div style={{display:"flex",gap:8}}>
                     <button className="btn btn-outline btn-sm no-print" onClick={()=>window.print()}>⬇ PDF</button>
                     {depForm.email && (
-                      <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(depForm.email, depForm.immat, "depart")}>📧 Email</button>
+                      <button className="btn btn-blue btn-sm no-print" disabled={depEmailSending} onClick={sendDepartEmail}>{depEmailSending?"⏳ Envoi…":depEmailSent?"✓ Envoyé — renvoyer":"📧 Envoyer au client"}</button>
                     )}
                     <button className="btn btn-gold" onClick={async()=>{const pending=(depPhotos["a_trier"]||[]).length; if(pending&&!window.confirm(`${pending} photo${pending>1?"s":""} du bac d'import n'${pending>1?"ont":"a"} pas été affectée${pending>1?"s":""} et ser${pending>1?"ont":"a"} abandonnée${pending>1?"s":""}.\n\nValider quand même ?`)) return; await saveDepart();clearDraft("depart");goHome();}} disabled={!depForm.immat || uploadingCount > 0}>{uploadingCount > 0 ? `⏳ Upload en cours (${uploadingCount})` : "✓ Valider & sauvegarder"}</button>
                   </div>
