@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { db, auth, googleProvider, storage } from "./firebase";
-import { collection, doc, setDoc, getDocs, deleteDoc, getDoc, updateDoc } from "firebase/firestore";
+import { collection, doc, setDoc, getDocs, deleteDoc, getDoc, updateDoc, query, orderBy, limit, startAfter } from "firebase/firestore";
 import { getStorage, ref, uploadString, uploadBytes, getDownloadURL } from "firebase/storage";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import html2pdf from "html2pdf.js";
@@ -9,6 +9,7 @@ const ADMIN_PASSWORD = "nacelle2024";
 const EMAIL_CC = "assistanat.commerce@delta-services.fr";
 const REMOVE_BG_KEY = "EwW4qNTWQbKeGVs1GaQkiX3W";
 const APP_URL = "https://nacelle-expert2.vercel.app"; // production — utilisé pour les liens courts /api/rapport
+const PAGE_DOSSIERS = 60; // pagination : nombre de dossiers chargés par page (accueil + « Voir plus »)
 
 // ─── Alerte automatique par email à la validation d'une expertise retour ───
 // L'envoi est fait CÔTÉ SERVEUR par la fonction Vercel /api/notify-rapport
@@ -921,6 +922,10 @@ export default function App() {
   const [uploadingCount, setUploadingCount] = useState(0);
   const [savingRetour, setSavingRetour] = useState(false);
   const [dossiers,setDossiers]=useState({});
+  // ─── Pagination des dossiers (perf : on ne charge plus tout l'historique) ───
+  const [dossiersCursor,setDossiersCursor]=useState(null);   // dernier doc de la page chargée
+  const [hasMoreDossiers,setHasMoreDossiers]=useState(false);
+  const [loadingMore,setLoadingMore]=useState(false);
   const [zones,setZones]=useState(DEFAULT_ZONES);
   const [tarifs,setTarifs]=useState(DEFAULT_TARIFS);
   const [typesNacelle,setTypesNacelle]=useState(DEFAULT_TYPES_NACELLE);
@@ -1107,6 +1112,13 @@ export default function App() {
   },[]);
 
   useEffect(()=>{ loadAll(); },[]);
+
+  // Recherche accueil : si l'utilisateur tape une immatriculation complète qui
+  // n'est pas dans les pages chargées, on va la chercher directement sur le serveur.
+  useEffect(()=>{
+    const im = normalizeImmat((searchQ||"").trim());
+    if (/^[A-Z]{2}-[0-9]{3}-[A-Z]{2}$/.test(im) && !dossiers[im]) { fetchDossier(im); }
+  },[searchQ]);
   
   // Avertir si fermeture de page pendant un upload de photo
   useEffect(()=>{
@@ -1221,10 +1233,34 @@ export default function App() {
     }
   },[userProfile]);
 
+  // ─── Chargement PAGINÉ des dossiers ───
+  // Avant : la collection ENTIÈRE était téléchargée à chaque ouverture (archives
+  // comprises) → démarrage de plus en plus lent avec l'historique qui grossit.
+  // Maintenant : les PAGE_DOSSIERS plus récents, puis « Voir plus » à la demande.
+  // Les recherches par immatriculation vont chercher directement le dossier sur
+  // le serveur s'il n'est pas chargé (fetchDossier) : rien n'est jamais introuvable.
   async function loadAll() {
     setLoading(true);
     try {
-      const snap=await getDocs(collection(db,"dossiers")); const result={}; snap.docs.forEach(d=>{result[d.id]=d.data();}); setDossiers(result);
+      let docsList = [];
+      try {
+        const qy = query(collection(db, "dossiers"), orderBy("createdAt", "desc"), limit(PAGE_DOSSIERS));
+        const snap = await getDocs(qy);
+        docsList = snap.docs;
+        setDossiersCursor(docsList.length ? docsList[docsList.length - 1] : null);
+        setHasMoreDossiers(docsList.length === PAGE_DOSSIERS);
+      } catch (e) {
+        // Sécurité : si la requête paginée échoue (index, données legacy...),
+        // on retombe sur l'ancien chargement complet plutôt que de rien afficher.
+        console.warn("Chargement paginé impossible, chargement complet:", e);
+        const snap = await getDocs(collection(db, "dossiers"));
+        docsList = snap.docs;
+        setDossiersCursor(null);
+        setHasMoreDossiers(false);
+      }
+      const result = {};
+      docsList.forEach(d => { result[d.id] = d.data(); });
+      setDossiers(result);
       const zC=await fbGetConfig("zones"); if(zC?.data) setZones(zC.data);
       const tnC=await fbGetConfig("types_nacelle"); if(tnC?.data?.length) setTypesNacelle(tnC.data);
       const tC=await fbGetConfig("tarifs");
@@ -1238,6 +1274,39 @@ export default function App() {
       }
     } catch(e){console.error(e);}
     setLoading(false);
+  }
+
+  // « Voir plus » : charge la page suivante de dossiers (plus anciens)
+  async function loadMoreDossiers() {
+    if (!dossiersCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const qy = query(collection(db, "dossiers"), orderBy("createdAt", "desc"), startAfter(dossiersCursor), limit(PAGE_DOSSIERS));
+      const snap = await getDocs(qy);
+      setDossiers(prev => { const n = { ...prev }; snap.docs.forEach(d => { if (!n[d.id]) n[d.id] = d.data(); }); return n; });
+      setDossiersCursor(snap.docs.length ? snap.docs[snap.docs.length - 1] : null);
+      setHasMoreDossiers(snap.docs.length === PAGE_DOSSIERS);
+    } catch (e) { console.error("Voir plus de dossiers:", e); }
+    finally { setLoadingMore(false); }
+  }
+
+  // Récupère UN dossier par immatriculation : dans l'état local s'il est chargé,
+  // sinon directement sur le serveur (puis mémorisé). Garantit que les recherches
+  // (retour, départ, photos de ventes) trouvent TOUJOURS un dossier, même ancien
+  // et hors des pages chargées.
+  async function fetchDossier(immatRaw) {
+    const im = normalizeImmat((immatRaw || "").trim());
+    if (!im) return null;
+    if (dossiers[im]) return dossiers[im];
+    try {
+      const snap = await getDoc(doc(db, "dossiers", im));
+      if (snap.exists()) {
+        const d = snap.data();
+        setDossiers(prev => prev[im] ? prev : { ...prev, [im]: d });
+        return d;
+      }
+    } catch (e) { console.error("Chargement du dossier", im, e); }
+    return null;
   }
 
   // Auth functions
@@ -1389,28 +1458,42 @@ export default function App() {
     const rand = Math.random().toString(36).slice(2, 8);
     const storagePath = `dossiers/${immat}/${type}/${zoneId}/${timestamp}_${rand}.jpg`;
     const storageRef = ref(storage, storagePath);
-    await withTimeout(uploadString(storageRef, compressed, "data_url"), 90000, "envoi de " + file.name);
+    // ⚡ Envoi BINAIRE (uploadBytes) plutôt que base64 (uploadString) :
+    // ~25 % de données en moins à transférer — appréciable en 4G sur chantier.
+    const blob = await (await fetch(compressed)).blob();
+    await withTimeout(uploadBytes(storageRef, blob, { contentType: "image/jpeg" }), 90000, "envoi de " + file.name);
     const url = await withTimeout(getDownloadURL(storageRef), 30000, "récupération URL");
     return { name: file.name, url, path: storagePath };
   }
 
+  // ⚡ Envois PARALLÉLISÉS : 3 photos à la fois au lieu d'une par une.
+  // Pendant qu'une photo part sur le réseau, la suivante se compresse sur le
+  // processeur → ~3× plus rapide sur un lot. Limité à 3 simultanées pour ne pas
+  // saturer la mémoire du téléphone ni la connexion mobile.
+  const UPLOAD_CONCURRENCY = 3;
   async function addPhotos(files, zoneId, setter) {
     const arr = Array.from(files || []);
     if (!arr.length) return;
     setUploadingCount(n => n + arr.length);
     const failed = [];
-    for (const f of arr) {
-      try {
-        const photo = await uploadPhotoToStorage(f, zoneId);
-        setter(prev => ({ ...prev, [zoneId]: [...(prev[zoneId] || []), photo] }));
-      } catch (e) {
-        console.error("Erreur upload photo:", f?.name, e);
-        failed.push(`${f?.name || "photo"} — ${e.message}`);
-      } finally {
-        // Toujours décrémenter, même en cas d'échec : le compteur ne peut plus rester bloqué
-        setUploadingCount(n => Math.max(0, n - 1));
+    const queue = [...arr];
+    const worker = async () => {
+      while (queue.length) {
+        const f = queue.shift();
+        if (!f) break;
+        try {
+          const photo = await uploadPhotoToStorage(f, zoneId);
+          setter(prev => ({ ...prev, [zoneId]: [...(prev[zoneId] || []), photo] }));
+        } catch (e) {
+          console.error("Erreur upload photo:", f?.name, e);
+          failed.push(`${f?.name || "photo"} — ${e.message}`);
+        } finally {
+          // Toujours décrémenter, même en cas d'échec : le compteur ne peut plus rester bloqué
+          setUploadingCount(n => Math.max(0, n - 1));
+        }
       }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, arr.length) }, worker));
     // Une seule alerte récapitulative à la fin (les alertes en boucle bloquaient la file)
     if (failed.length) {
       alert(`${failed.length} photo${failed.length>1?"s n'ont":" n'a"} pas pu être envoyée${failed.length>1?"s":""} :\n\n${failed.join("\n")}\n\nLes autres photos ont bien été ajoutées. Vous pouvez réessayer.`);
@@ -1537,7 +1620,8 @@ export default function App() {
     // ── Cycles multiples : une nacelle fait des allers-retours départ→retour→départ...
     // Si un cycle complet (départ + retour) existe déjà pour cette immat, on l'ARCHIVE
     // avant de créer le nouveau départ, au lieu de l'écraser définitivement.
-    const previous = dossiers[depForm.immat];
+    // Le dossier peut être ancien et hors des pages chargées → recherche serveur si besoin
+    const previous = dossiers[depForm.immat] || await fetchDossier(depForm.immat);
     if (previous?.retour) {
       const archiveId = `${previous.immat}__ARCH__${Date.now()}`;
       const archivedDoc = { ...previous, archived: true, archiveId, archivedAt: new Date().toISOString() };
@@ -1597,7 +1681,7 @@ export default function App() {
     const renamedFrom = foundDossier._renamedFrom;
     const isRenamed = !!renamedFrom && renamedFrom !== foundDossier.immat;
     if (isRenamed) {
-      const clash = dossiers[foundDossier.immat];
+      const clash = dossiers[foundDossier.immat] || await fetchDossier(foundDossier.immat);
       if (clash && clash.id !== foundDossier.id) {
         alert(`⚠ Impossible de corriger l'immatriculation : un autre dossier existe déjà pour « ${foundDossier.immat} ».`);
         return null;
@@ -1754,7 +1838,7 @@ export default function App() {
   async function searchVente() {
     const im = (venteImmat||"").trim().toUpperCase();
     if(!im) return;
-    setActiveDossier(dossiers[im]||null);
+    setActiveDossier((await fetchDossier(im))||null);
     setVentePhotosLibres({});
     setVenteSearchDone(true);
     try {
@@ -2029,6 +2113,17 @@ export default function App() {
                 </div>
               </div>
             ))}
+            {/* Pagination : les dossiers plus anciens se chargent à la demande */}
+            {hasMoreDossiers && (
+              <div style={{textAlign:"center",marginTop:12}}>
+                <button className="btn btn-outline" onClick={loadMoreDossiers} disabled={loadingMore}>
+                  {loadingMore ? "⏳ Chargement..." : "Voir plus de dossiers ↓"}
+                </button>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>
+                  {Object.keys(dossiers).length} dossier(s) chargé(s) — les plus récents d'abord. La recherche par immatriculation trouve aussi les anciens dossiers.
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2054,11 +2149,14 @@ export default function App() {
                         client / contrat / email / modèle... sont remplis automatiquement. */}
                     <div><label>Immatriculation *</label><input value={depForm.immat} onChange={e=>{
                       const immat = normalizeImmat(e.target.value);
-                      const existing = dossiers[immat];
-                      if (existing?.info) {
-                        const i = existing.info;
-                        setDepForm(f=>({
-                          ...f, immat,
+                      // Pré-remplit les champs VIDES depuis le dossier existant (infos ADV
+                      // Delta VO ou cycle précédent). Le dossier est cherché sur le serveur
+                      // s'il n'est pas dans les pages chargées (pagination).
+                      const applyPrefill = (d) => {
+                        if (!d?.info) return;
+                        const i = d.info;
+                        setDepForm(f => f.immat === immat ? ({
+                          ...f,
                           client: f.client || i.client || "",
                           contrat: f.contrat || i.contrat || "",
                           email: f.email || i.email || "",
@@ -2066,10 +2164,11 @@ export default function App() {
                           modele: f.modele || i.modele || "",
                           annee_fab: f.annee_fab || i.annee_fab || "",
                           numero_cube: f.numero_cube || i.numero_cube || "",
-                        }));
-                      } else {
-                        setDepForm(f=>({...f, immat}));
-                      }
+                        }) : f);
+                      };
+                      setDepForm(f=>({...f, immat}));
+                      if (dossiers[immat]) applyPrefill(dossiers[immat]);
+                      else if (/^[A-Z]{2}-[0-9]{3}-[A-Z]{2}$/.test(immat)) fetchDossier(immat).then(applyPrefill);
                     }} placeholder="AB-123-CD"/></div>
                     <div><label>Type nacelle</label><TypeNacelleSelect value={depForm.type_nacelle} onChange={v=>setDepForm({...depForm,type_nacelle:v})} types={typesNacelle}/></div>
                     <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
@@ -2350,8 +2449,8 @@ export default function App() {
                 <div className="card" style={{marginBottom:14}}>
                   <label>Immatriculation nacelle</label>
                   <div style={{display:"flex",gap:8}}>
-                    <input value={searchImmat} onChange={e=>{setSearchImmat(normalizeImmat(e.target.value));setSearchDone(false);}} placeholder="AB-123-CD" style={{flex:1}} onKeyDown={e=>{if(e.key==="Enter"){setFoundDossier(dossiers[searchImmat]||null);setSearchDone(true);}}}/>
-                    <button className="btn btn-gold" onClick={()=>{setFoundDossier(dossiers[searchImmat]||null);setSearchDone(true);}}>Rechercher</button>
+                    <input value={searchImmat} onChange={e=>{setSearchImmat(normalizeImmat(e.target.value));setSearchDone(false);}} placeholder="AB-123-CD" style={{flex:1}} onKeyDown={e=>{if(e.key==="Enter"){fetchDossier(searchImmat).then(d=>{setFoundDossier(d||null);setSearchDone(true);});}}}/>
+                    <button className="btn btn-gold" onClick={()=>{fetchDossier(searchImmat).then(d=>{setFoundDossier(d||null);setSearchDone(true);});}}>Rechercher</button>
                   </div>
                 </div>
                 {searchDone&&!foundDossier&&(
