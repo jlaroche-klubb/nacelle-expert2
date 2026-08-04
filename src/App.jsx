@@ -21,12 +21,16 @@ async function notifyRapportExpertise(dossier, tarifs, isUpdate) {
     const token = await auth.currentUser?.getIdToken();
     if (!token) { console.warn("📧 Alerte rapport non envoyée (utilisateur non authentifié)"); return; }
     const vt = getVetuste(dossier.info?.annee_fab);
+    const md = dossier.retour?.montants_devis || {};
     const total = (dossier.retour?.degats || []).reduce((s, id) => {
       const t = tarifs.find(t => t.id === id);
-      if (!t || t.surDevis || !t.prix) return s;
-      return s + prixAvecVetuste(t.prix, vt) * (dossier.retour?.quantites?.[id] || 1);
+      return s + montantPoste(t, dossier.retour?.quantites?.[id] || 1, vt, md);
     }, 0);
-    const surDevis = (dossier.retour?.degats || []).some(id => tarifs.find(t => t.id === id)?.surDevis);
+    // "+ postes sur devis" : uniquement s'il reste des postes sur devis SANS montant saisi
+    const surDevis = (dossier.retour?.degats || []).some(id => {
+      const t = tarifs.find(t => t.id === id);
+      return t?.surDevis && !md[id];
+    });
     const resp = await fetch("/api/notify-rapport", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
@@ -267,10 +271,25 @@ const DEFAULT_ZONES = [
 
 const DEFAULT_TARIFS = [
   // CARROSSERIE
-  { id: "deformation", zone: "carrosserie", label: "Déformations > 100 cm²", prix: null, surDevis: true },
-  { id: "dechirure", zone: "carrosserie", label: "Déchirures, cassures et fissures > 5 cm", prix: null, surDevis: true },
-  { id: "depot", zone: "carrosserie", label: "Dépôts industriels, chimiques ou non nettoyable > 200 cm²", prix: null, surDevis: true },
-  { id: "rayure_oxydation", zone: "carrosserie", label: "Rayures avec oxydation", prix: null, surDevis: true },
+  // Postes "sur devis" avec BARÈME PAR TAILLE : l'expert choisit la tranche
+  // mesurée, le montant tombe automatiquement (barème aligné sur les pratiques
+  // de restitution du marché — modifiable dans Admin → Postes tarifaires).
+  { id: "deformation", zone: "carrosserie", label: "Déformations > 100 cm²", prix: null, surDevis: true, bareme: [
+    { label: "100 à 300 cm² — débosselage + peinture", montant: 280 },
+    { label: "> 300 cm² — élément complet", montant: 450 },
+  ] },
+  { id: "dechirure", zone: "carrosserie", label: "Déchirures, cassures et fissures > 5 cm", prix: null, surDevis: true, bareme: [
+    { label: "5 à 20 cm — réparation", montant: 300 },
+    { label: "> 20 cm — remplacement élément", montant: 600 },
+  ] },
+  { id: "depot", zone: "carrosserie", label: "Dépôts industriels, chimiques ou non nettoyable > 200 cm²", prix: null, surDevis: true, bareme: [
+    { label: "> 200 cm² — nettoyage spécialisé", montant: 150 },
+    { label: "Avec reprise peinture", montant: 350 },
+  ] },
+  { id: "rayure_oxydation", zone: "carrosserie", label: "Rayures avec oxydation", prix: null, surDevis: true, bareme: [
+    { label: "5 à 30 cm — raccord peinture", montant: 180 },
+    { label: "> 30 cm ou multi-éléments — peinture élément", montant: 350 },
+  ] },
   { id: "sinistre", zone: "carrosserie", label: "Dommages non réparés suite à sinistre", prix: null, surDevis: true },
   // MOULURES
   { id: "pare_choc_avant", zone: "moulures", label: "Pare-choc avant — cassé ou rayure profonde", prix: 470 },
@@ -747,12 +766,17 @@ async function generateDepartHTML(dossier) {
 async function generateReportHTML(dossier, tarifs, zones, vetusteTaux) {
   const ret = dossier.retour;
   const info = dossier.info;
-  const total = (ret?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix)return s;return s+Math.round(t.prix*(1+vetusteTaux/100));},0);
+  const mdReport = ret?.montants_devis || {};
+  const tdReport = ret?.tranches_devis || {};
+  const total = (ret?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);return s+montantPoste(t,ret?.quantites?.[id]||1,vetusteTaux,mdReport);},0);
   const degatsHTML = (ret?.degats||[]).map(id=>{
     const t=tarifs.find(t=>t.id===id);
     if(!t) return '';
-    const prix = t.surDevis ? 'Sur devis' : Math.round(t.prix*(1+vetusteTaux/100))+'&nbsp;€';
-    return `<tr><td style="padding:8px 12px;border-bottom:1px solid #e0e4ea;">${t.label}</td><td style="padding:8px 12px;border-bottom:1px solid #e0e4ea;text-align:right;font-weight:700;color:#1a2a6e;">${prix}</td></tr>`;
+    const prix = t.surDevis
+      ? (mdReport[id] ? Number(mdReport[id]).toLocaleString('fr-FR')+'&nbsp;€' : 'Sur devis')
+      : Math.round(t.prix*(1+vetusteTaux/100))+'&nbsp;€';
+    const tranche = tdReport[id] ? ` <span style="color:#889;font-size:11px;">(${tdReport[id]})</span>` : '';
+    return `<tr><td style="padding:8px 12px;border-bottom:1px solid #e0e4ea;">${t.label}${tranche}</td><td style="padding:8px 12px;border-bottom:1px solid #e0e4ea;text-align:right;font-weight:700;color:#1a2a6e;">${prix}</td></tr>`;
   }).join('');
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0;background:#f0f2f5;font-family:Arial,sans-serif;">
@@ -818,6 +842,16 @@ function getVetuste(annee_fab) {
   return v?v.taux:(age>=10?-55:0);
 }
 function prixAvecVetuste(prix,taux) { return prix?Math.round(prix*(1+taux/100)):0; }
+// Montant retenu pour un poste de dégât :
+// - poste tarifé : prix catalogue avec vétusté × quantité
+// - poste "sur devis" : montant saisi EN DIRECT par l'expert (tel quel, sans
+//   vétusté — c'est le montant réel constaté), ou 0 si laissé "sur devis"
+function montantPoste(t, qte, taux, montantsDevis) {
+  if (!t) return 0;
+  if (t.surDevis) return Number(montantsDevis?.[t.id]) || 0;
+  if (!t.prix) return 0;
+  return prixAvecVetuste(t.prix, taux) * (qte || 1);
+}
 
 // Résumé lecture seule des tests (affiché dans les récapitulatifs / rapports)
 function TestNacelleSummary({ tests }) {
@@ -946,7 +980,7 @@ export default function App() {
   const [adminMsg,setAdminMsg]=useState("");
   const [zoneForm,setZoneForm]=useState({label:"",icon:"⟋"});
   const [zoneEdit,setZoneEdit]=useState(null);
-  const [tarifForm,setTarifForm]=useState({zone:"",label:"",prix:"",surDevis:false});
+  const [tarifForm,setTarifForm]=useState({zone:"",label:"",prix:"",surDevis:false,bareme:[]});
   const [tarifEdit,setTarifEdit]=useState(null);
 
   const [depForm,setDepForm]=useState({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});
@@ -1023,6 +1057,8 @@ export default function App() {
       setRetTests(draft.data.retTests || {});
       setRetPhotos(draft.data.retPhotos || {});
       setRetDegats(draft.data.retDegats || []);
+      setRetMontantsDevis(draft.data.retMontantsDevis || {});
+      setRetTranchesDevis(draft.data.retTranchesDevis || {});
       setRetQtes(draft.data.retQtes || {});
       setRetNote(draft.data.retNote || "");
       setRetStep(draft.data.retStep || 1);
@@ -1042,6 +1078,11 @@ export default function App() {
   const [retZones,setRetZones]=useState({});
   const [retPhotos,setRetPhotos]=useState({});
   const [retDegats,setRetDegats]=useState([]);
+  // Montants saisis en direct pour les postes "sur devis" : { tarifId: montant € HT }
+  const [retMontantsDevis,setRetMontantsDevis]=useState({});
+  // Tranche de barème choisie pour les postes "sur devis" : { tarifId: libellé }
+  // ("__LIBRE__" = montant saisi manuellement hors barème)
+  const [retTranchesDevis,setRetTranchesDevis]=useState({});
   const [retQtes,setRetQtes]=useState({}); // { tarifId: quantité } — 1 par défaut
   const [triPhoto,setTriPhoto]=useState(null);   // index de la photo "à trier" en cours d'affectation
   const [triFilter,setTriFilter]=useState("");   // recherche dans la liste d'affectation
@@ -1138,9 +1179,9 @@ export default function App() {
   // Auto-save RETOUR (brouillon)
   useEffect(()=>{
     if(view==="retour" && retStep >= 1) {
-      saveDraft("retour", { retForm, retZones, retTests, retPhotos, retDegats, retQtes, retNote, retStep, foundDossier, searchImmat, emailClient });
+      saveDraft("retour", { retForm, retZones, retTests, retPhotos, retDegats, retQtes, retMontantsDevis, retTranchesDevis, retNote, retStep, foundDossier, searchImmat, emailClient });
     }
-  },[view, retForm, retZones, retTests, retPhotos, retDegats, retQtes, retNote, retStep, foundDossier, emailClient]);
+  },[view, retForm, retZones, retTests, retPhotos, retDegats, retQtes, retMontantsDevis, retTranchesDevis, retNote, retStep, foundDossier, emailClient]);
 
   // Reprise retour : ré-injecte le dossier départ complet depuis la mémoire
   // (la liste "dossiers" se charge en asynchrone, et un brouillon tronqué ne contient que l'immat).
@@ -1268,7 +1309,12 @@ export default function App() {
         const loaded=tC.data;
         // Ajoute les postes par défaut manquants (ex: nouveaux feux dissociés) sans écraser les prix existants
         const missing=DEFAULT_TARIFS.filter(dt=>!loaded.some(t=>t.id===dt.id));
-        setTarifs(missing.length?[...loaded,...missing]:loaded);
+        // Enrichit les postes "sur devis" existants avec le barème par taille par défaut
+        // (uniquement s'ils n'en ont pas déjà un personnalisé en admin)
+        // (bareme === undefined : données d'avant la fonctionnalité ; bareme === null :
+        //  barème volontairement retiré en admin → on ne le réinjecte pas)
+        const enriched=loaded.map(t=>{ const dt=DEFAULT_TARIFS.find(d=>d.id===t.id); return (dt?.bareme&&t.surDevis&&t.bareme===undefined)?{...t,bareme:dt.bareme}:t; });
+        setTarifs(missing.length?[...enriched,...missing]:enriched);
       } else {
         setTarifs(DEFAULT_TARIFS);
       }
@@ -1595,6 +1641,9 @@ export default function App() {
     setRetTests(d.retour.tests || {});
     setRetPhotos(d.retour.photos || {});
     setRetDegats(d.retour.degats || []);
+    setRetMontantsDevis(d.retour.montants_devis || {});
+    // Recharge les tranches ; les montants sans tranche = saisie libre
+    setRetTranchesDevis((()=>{ const td={...(d.retour.tranches_devis||{})}; Object.keys(d.retour.montants_devis||{}).forEach(id=>{ if(!td[id]) td[id]="__LIBRE__"; }); return td; })());
     setRetQtes(d.retour.quantites || {});
     setRetNote(d.retour.note || "");
     setEmailClient(d.info?.email || "");
@@ -1715,6 +1764,9 @@ export default function App() {
         tests:retTests,
         degats:retDegats,
         quantites:retQtes,
+        montants_devis:retMontantsDevis, // montants saisis en direct sur les postes "sur devis"
+        // Tranches de barème choisies (libellés affichés dans le rapport) — hors saisie libre
+        tranches_devis:Object.fromEntries(Object.entries(retTranchesDevis).filter(([,v])=>v&&v!=="__LIBRE__")),
         note:retNote,
         date:retForm.date,
         heures:retForm.heures,
@@ -1751,10 +1803,15 @@ export default function App() {
     if(!tarifForm.label.trim()||!tarifForm.zone) return;
     const entry={zone:tarifForm.zone,label:tarifForm.label,surDevis:tarifForm.surDevis};
     if(!tarifForm.surDevis&&tarifForm.prix) entry.prix=parseInt(tarifForm.prix); else entry.prix=null;
+    // Barème par taille : uniquement pour les postes sur devis, tranches complètes
+    entry.bareme = tarifForm.surDevis
+      ? (tarifForm.bareme||[]).filter(b=>b.label?.trim()&&Number(b.montant)>0)
+      : null;
+    if(!entry.bareme?.length) entry.bareme=null;
     let updated;
     if(tarifEdit!==null) updated=tarifs.map((t,i)=>i===tarifEdit?{...t,...entry}:t);
     else { const id=tarifForm.label.toLowerCase().replace(/[^a-z0-9]/g,"_").slice(0,18)+"_"+genId().slice(0,3).toLowerCase(); updated=[...tarifs,{id,...entry}]; }
-    setTarifs(updated); await fbSaveConfig("tarifs",{data:updated}); setTarifForm({zone:"",label:"",prix:"",surDevis:false}); setTarifEdit(null); flash(tarifEdit!==null?"Poste modifié ✓":"Poste ajouté ✓");
+    setTarifs(updated); await fbSaveConfig("tarifs",{data:updated}); setTarifForm({zone:"",label:"",prix:"",surDevis:false,bareme:[]}); setTarifEdit(null); flash(tarifEdit!==null?"Poste modifié ✓":"Poste ajouté ✓");
   }
   async function deleteTarif(idx) { const updated=tarifs.filter((_,i)=>i!==idx); setTarifs(updated); await fbSaveConfig("tarifs",{data:updated}); flash("Poste supprimé ✓"); }
   async function deleteDossier(immat) {
@@ -1768,7 +1825,7 @@ export default function App() {
   function flash(msg) { setAdminMsg(msg); setTimeout(()=>setAdminMsg(""),2500); }
 
   const vetusteTaux = foundDossier ? getVetuste(foundDossier.info?.annee_fab) : 0;
-  const totalRetenue = retDegats.reduce((s,id)=>{ const t=tarifs.find(t=>t.id===id); if(!t||t.surDevis||!t.prix) return s; return s+prixAvecVetuste(t.prix,vetusteTaux)*(retQtes[id]||1); },0);
+  const totalRetenue = retDegats.reduce((s,id)=>{ const t=tarifs.find(t=>t.id===id); return s+montantPoste(t,retQtes[id]||1,vetusteTaux,retMontantsDevis); },0);
   // Les cycles archivés (allers-retours précédents) sont exclus des listes ; ils restent
   // consultables dans l'historique du rapport de chaque nacelle.
   const dossiersActifs = Object.values(dossiers).filter(d=>!d.archived);
@@ -2043,7 +2100,7 @@ export default function App() {
                   const tous=dossiersActifs;
                   const avecRetour=tous.filter(d=>d.retour);
                   const tousDegatIds=avecRetour.flatMap(d=>d.retour?.degats||[]);
-                  const montants=avecRetour.map(d=>{const vt=getVetuste(d.info?.annee_fab);return (d.retour?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix)return s;return s+prixAvecVetuste(t.prix,vt)*(d.retour?.quantites?.[id]||1);},0);});
+                  const montants=avecRetour.map(d=>{const vt=getVetuste(d.info?.annee_fab);return (d.retour?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);return s+montantPoste(t,d.retour?.quantites?.[id]||1,vt,d.retour?.montants_devis||{});},0);});
                   const totalGlobal=montants.reduce((s,m)=>s+m,0);
                   const moyenneRetenue=avecRetour.length?Math.round(totalGlobal/avecRetour.length):0;
                   const freqDegats=tousDegatIds.reduce((acc,id)=>{acc[id]=(acc[id]||0)+1;return acc;},{});
@@ -2512,7 +2569,7 @@ export default function App() {
                       <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
                         {!retForm.numero_cube&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Le N° de cube est obligatoire</div>}
                         {!retForm.lieu_restitution&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Le lieu de restitution est obligatoire</div>}
-                        <button className="btn btn-gold" disabled={!retForm.numero_cube||!retForm.lieu_restitution} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetQtes({});setRetNote("");setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
+                        <button className="btn btn-gold" disabled={!retForm.numero_cube||!retForm.lieu_restitution} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetQtes({});setRetMontantsDevis({});setRetTranchesDevis({});setRetNote("");setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
                       </div>
                     </div>
                   </div>
@@ -2611,7 +2668,7 @@ export default function App() {
                       setRetZones({});
                       setRetTests({});
                       setRetPhotos({});
-                      setRetDegats([]);setRetQtes({});
+                      setRetDegats([]);setRetQtes({});setRetMontantsDevis({});setRetTranchesDevis({});
                       setRetNote("");
                       setEmailClient(d.info.email);
                       setEmailSent(false);
@@ -2837,13 +2894,20 @@ export default function App() {
                                     const dphotos=retPhotos[pkey]||[];
                                     return (
                                     <div key={t.id} style={{marginBottom:3}}>
-                                      <div className={`tarif-row ${checked?"active":""}`} style={{marginBottom:0}} onClick={()=>{const wasChecked=retDegats.includes(t.id);setRetDegats(prev=>wasChecked?prev.filter(d=>d!==t.id):[...prev,t.id]);setRetQtes(prev=>{const n={...prev};if(wasChecked){delete n[t.id];}else{n[t.id]=1;}return n;});}}>
+                                      <div className={`tarif-row ${checked?"active":""}`} style={{marginBottom:0}} onClick={()=>{const wasChecked=retDegats.includes(t.id);setRetDegats(prev=>wasChecked?prev.filter(d=>d!==t.id):[...prev,t.id]);setRetQtes(prev=>{const n={...prev};if(wasChecked){delete n[t.id];}else{n[t.id]=1;}return n;});setRetMontantsDevis(prev=>{if(!wasChecked)return prev;const n={...prev};delete n[t.id];return n;});setRetTranchesDevis(prev=>{if(!wasChecked)return prev;const n={...prev};delete n[t.id];return n;});}}>
                                         <div style={{display:"flex",alignItems:"center",gap:10}}>
                                           <div style={{width:16,height:16,border:`2px solid ${checked?"var(--primary)":"var(--border2)"}`,background:checked?"var(--primary)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",flexShrink:0}}>{checked?"✓":""}</div>
                                           <span style={{fontSize:13}}>{t.label}{checked&&(retQtes[t.id]||1)>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {retQtes[t.id]}</span>}</span>
                                         </div>
                                         {t.surDevis?(
-                                          <span style={{fontSize:11,color:"var(--accent)",fontWeight:700,fontFamily:"monospace",whiteSpace:"nowrap"}}>SUR DEVIS</span>
+                                          retMontantsDevis[t.id] ? (
+                                            <div style={{textAlign:"right",flexShrink:0}}>
+                                              <div className="mono" style={{color:"var(--primary)",fontSize:13,fontWeight:700}}>{Number(retMontantsDevis[t.id]).toLocaleString("fr-FR")} €</div>
+                                              <div style={{fontSize:9,color:"var(--muted)"}}>montant saisi</div>
+                                            </div>
+                                          ) : (
+                                            <span style={{fontSize:11,color:"var(--accent)",fontWeight:700,fontFamily:"monospace",whiteSpace:"nowrap"}}>SUR DEVIS</span>
+                                          )
                                         ):(
                                           <div style={{textAlign:"right",flexShrink:0}}>
                                             <div className="mono" style={{color:"var(--primary)",fontSize:13,fontWeight:700}}>{checked&&(retQtes[t.id]||1)>1?(prixAvecVetuste(t.prix,vetusteTaux)*(retQtes[t.id]||1)).toLocaleString("fr-FR"):prixAvecVetuste(t.prix,vetusteTaux)} €</div>
@@ -2860,6 +2924,55 @@ export default function App() {
                                             <span className="mono" style={{minWidth:30,textAlign:"center",fontSize:14,fontWeight:700,color:"var(--primary)"}}>{retQtes[t.id]||1}</span>
                                             <button type="button" style={{border:"none",background:"transparent",color:"var(--primary)",padding:"6px 14px",fontSize:16,fontWeight:700,cursor:"pointer",lineHeight:1}} onClick={(e)=>{e.stopPropagation();setRetQtes(prev=>({...prev,[t.id]:Math.min(99,(prev[t.id]||1)+1)}));}}>+</button>
                                           </div>
+                                          {/* Poste "sur devis" : chiffrage EN DIRECT par l'expert.
+                                              - Barème par taille défini (admin) → choix d'une tranche, montant automatique
+                                              - Option "Autre montant" ou pas de barème → saisie libre
+                                              - Rien choisi → reste "SUR DEVIS" (non compté dans le total) */}
+                                          {t.surDevis&&(
+                                            <>
+                                              {Array.isArray(t.bareme)&&t.bareme.length>0&&(
+                                                <>
+                                                  <span style={{fontSize:10,letterSpacing:1.5,color:"var(--muted)",textTransform:"uppercase"}}>Taille constatée</span>
+                                                  <select
+                                                    value={retTranchesDevis[t.id]??""}
+                                                    onClick={e=>e.stopPropagation()}
+                                                    onChange={e=>{
+                                                      const label=e.target.value;
+                                                      if(label===""){
+                                                        setRetTranchesDevis(prev=>{const n={...prev};delete n[t.id];return n;});
+                                                        setRetMontantsDevis(prev=>{const n={...prev};delete n[t.id];return n;});
+                                                      } else if(label==="__LIBRE__"){
+                                                        setRetTranchesDevis(prev=>({...prev,[t.id]:"__LIBRE__"}));
+                                                        setRetMontantsDevis(prev=>{const n={...prev};delete n[t.id];return n;});
+                                                      } else {
+                                                        const tr=t.bareme.find(b=>b.label===label);
+                                                        setRetTranchesDevis(prev=>({...prev,[t.id]:label}));
+                                                        setRetMontantsDevis(prev=>({...prev,[t.id]:Number(tr?.montant)||0}));
+                                                      }
+                                                    }}
+                                                    style={{maxWidth:280,padding:"6px 8px",border:"1px solid var(--border2)",fontSize:12,marginRight:10}}
+                                                  >
+                                                    <option value="">Sur devis (non chiffré)</option>
+                                                    {t.bareme.map(b=><option key={b.label} value={b.label}>{b.label} — {b.montant} €</option>)}
+                                                    <option value="__LIBRE__">Autre montant…</option>
+                                                  </select>
+                                                </>
+                                              )}
+                                              {((!Array.isArray(t.bareme)||t.bareme.length===0)||retTranchesDevis[t.id]==="__LIBRE__")&&(
+                                                <>
+                                                  <span style={{fontSize:10,letterSpacing:1.5,color:"var(--muted)",textTransform:"uppercase"}}>Montant € HT</span>
+                                                  <input
+                                                    type="number" min="0" step="1" inputMode="numeric"
+                                                    placeholder="Sur devis"
+                                                    value={retMontantsDevis[t.id]??""}
+                                                    onClick={e=>e.stopPropagation()}
+                                                    onChange={e=>{const v=e.target.value;setRetMontantsDevis(prev=>{const n={...prev};if(v===""||Number(v)<=0){delete n[t.id];}else{n[t.id]=Number(v);}return n;});}}
+                                                    style={{width:110,padding:"6px 8px",border:"1px solid var(--border2)",fontSize:13,marginRight:10}}
+                                                  />
+                                                </>
+                                              )}
+                                            </>
+                                          )}
                                           <span style={{fontSize:10,letterSpacing:1.5,color:"var(--muted)",textTransform:"uppercase",marginRight:4}}>Photos du dégât</span>
                                           {dphotos.map((p,i)=>(<div key={i} style={{position:"relative"}} onClick={(e)=>{e.stopPropagation();setLightboxUrl(p.url);}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn" title="Pivoter 90°" disabled={rotatingKey===pkey+"_"+i} onClick={(e)=>{e.stopPropagation();rotatePhotoAt(retPhotos,pkey,i,setRetPhotos);}} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===pkey+"_"+i?"…":"↻"}</button><button className="btn btn-danger" onClick={(e)=>{e.stopPropagation();removePhoto(pkey,i,setRetPhotos);}} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
                                           <div className="photo-add" style={{width:64,height:48,fontSize:20}} onClick={async(e)=>{e.stopPropagation();const f=await pickFile({multiple:true});if(f) addPhotos(f,pkey,setRetPhotos);}}>+</div>
@@ -2938,7 +3051,7 @@ export default function App() {
                   {retDegats.length>0?(
                     <div>
                       <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,fontWeight:700}}>Dégâts retenus</div>
-                      {retDegats.map(id=>{const t=tarifs.find(t=>t.id===id);const dphotos=retPhotos[`degat_${id}`]||[];const q=retQtes[id]||1;return t?(<div key={id} style={{padding:"7px 0",borderBottom:"1px solid var(--border)"}}><div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span>{t.label}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span><span className="mono" style={{color:"var(--primary)",fontWeight:700}}>{t.surDevis?"SUR DEVIS":(q>1?`${q} × ${prixAvecVetuste(t.prix,vetusteTaux)} € = ${(prixAvecVetuste(t.prix,vetusteTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vetusteTaux)+" €")}</span></div>{dphotos.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>{dphotos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>}</div>):null;})}
+                      {retDegats.map(id=>{const t=tarifs.find(t=>t.id===id);const dphotos=retPhotos[`degat_${id}`]||[];const q=retQtes[id]||1;return t?(<div key={id} style={{padding:"7px 0",borderBottom:"1px solid var(--border)"}}><div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span>{t.label}{retTranchesDevis[id]&&retTranchesDevis[id]!=="__LIBRE__"&&<span style={{marginLeft:6,fontSize:11,color:"var(--muted)"}}>({retTranchesDevis[id]})</span>}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span><span className="mono" style={{color:"var(--primary)",fontWeight:700}}>{t.surDevis?(retMontantsDevis[id]?`${Number(retMontantsDevis[id]).toLocaleString("fr-FR")} €`:"SUR DEVIS"):(q>1?`${q} × ${prixAvecVetuste(t.prix,vetusteTaux)} € = ${(prixAvecVetuste(t.prix,vetusteTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vetusteTaux)+" €")}</span></div>{dphotos.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>{dphotos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>}</div>):null;})}
                       {vetusteTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Taux de vétusté appliqué : {vetusteTaux}%</div>}
                       <div className="total-strip" style={{marginTop:10}}>
                         <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>TOTAL RETENUE HT</span>
@@ -3115,11 +3228,11 @@ export default function App() {
                     const vTaux=getVetuste(activeDossier.info?.annee_fab);
                     const q=activeDossier.retour?.quantites?.[id]||1;
                     return t?(<div key={id} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--border)",fontSize:13,alignItems:"center"}}>
-                      <span style={{flex:1,paddingRight:16}}>{t.label}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span>
-                      <span className="mono" style={{color:"var(--primary)",fontWeight:700,whiteSpace:"nowrap"}}>{t.surDevis?"Sur devis":(q>1?`${q} × ${prixAvecVetuste(t.prix,vTaux)} € = ${(prixAvecVetuste(t.prix,vTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vTaux)+" €")}</span>
+                      <span style={{flex:1,paddingRight:16}}>{t.label}{activeDossier.retour?.tranches_devis?.[id]&&<span style={{marginLeft:6,fontSize:11,color:"var(--muted)"}}>({activeDossier.retour.tranches_devis[id]})</span>}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span>
+                      <span className="mono" style={{color:"var(--primary)",fontWeight:700,whiteSpace:"nowrap"}}>{t.surDevis?((activeDossier.retour?.montants_devis?.[id])?Number(activeDossier.retour.montants_devis[id]).toLocaleString("fr-FR")+" €":"Sur devis"):(q>1?`${q} × ${prixAvecVetuste(t.prix,vTaux)} € = ${(prixAvecVetuste(t.prix,vTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vTaux)+" €")}</span>
                     </div>):null;
                   })}
-                  {(()=>{ const vTaux=getVetuste(activeDossier.info?.annee_fab); const total=activeDossier.retour.degats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix) return s;return s+prixAvecVetuste(t.prix,vTaux)*(activeDossier.retour?.quantites?.[id]||1);},0); return (
+                  {(()=>{ const vTaux=getVetuste(activeDossier.info?.annee_fab); const total=activeDossier.retour.degats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);return s+montantPoste(t,activeDossier.retour?.quantites?.[id]||1,vTaux,activeDossier.retour?.montants_devis||{});},0); return (
                     <div>
                       {vTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6,textAlign:"right"}}>Taux de vétusté : {vTaux}% — {activeDossier.info?.annee_fab}</div>}
                       <div className="total-strip" style={{marginTop:10}}>
@@ -3323,7 +3436,7 @@ export default function App() {
                       return (<div key={zone.id} style={{marginBottom:12}}>
                         <div style={{fontSize:10,letterSpacing:3,color:"var(--muted)",textTransform:"uppercase",marginBottom:6,display:"flex",gap:8,alignItems:"center"}}><span style={{color:"var(--primary)"}}>{zone.icon}</span>{zone.label}</div>
                         {tz.length===0&&<div style={{fontSize:12,color:"var(--muted)",padding:"8px 12px",border:"1px dashed var(--border)"}}>Aucun poste</div>}
-                        {tz.map(t=>{const gi=tarifs.findIndex(x=>x.id===t.id);return(<div key={t.id} className="admin-row"><span style={{fontSize:12,flex:1,paddingRight:8}}>{t.label}</span><div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}><span className="mono" style={{color:t.surDevis?"var(--accent)":"var(--primary)",fontSize:12,fontWeight:700}}>{t.surDevis?"Sur devis":t.prix+" €"}</span><button className="btn btn-icon" onClick={()=>{setTarifEdit(gi);setTarifForm({zone:t.zone,label:t.label,prix:t.prix?String(t.prix):"",surDevis:!!t.surDevis});}}>✏</button><button className="btn btn-icon" style={{color:"var(--danger)"}} onClick={()=>window.confirm(`Supprimer "${t.label}" ?`)&&deleteTarif(gi)}>🗑</button></div></div>);})}
+                        {tz.map(t=>{const gi=tarifs.findIndex(x=>x.id===t.id);return(<div key={t.id} className="admin-row"><span style={{fontSize:12,flex:1,paddingRight:8}}>{t.label}</span><div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}><span className="mono" style={{color:t.surDevis?"var(--accent)":"var(--primary)",fontSize:12,fontWeight:700}}>{t.surDevis?(Array.isArray(t.bareme)&&t.bareme.length?`Barème (${t.bareme.length})`:"Sur devis"):t.prix+" €"}</span><button className="btn btn-icon" onClick={()=>{setTarifEdit(gi);setTarifForm({zone:t.zone,label:t.label,prix:t.prix?String(t.prix):"",surDevis:!!t.surDevis,bareme:Array.isArray(t.bareme)?t.bareme.map(b=>({...b})):[]});}}>✏</button><button className="btn btn-icon" style={{color:"var(--danger)"}} onClick={()=>window.confirm(`Supprimer "${t.label}" ?`)&&deleteTarif(gi)}>🗑</button></div></div>);})}
                       </div>);
                     })}
                     <div style={{marginTop:16,padding:14,border:"1px solid var(--border2)",background:"#f8f9fb"}}>
@@ -3337,7 +3450,23 @@ export default function App() {
                         </label>
                       </div>
                       {!tarifForm.surDevis&&<div style={{marginBottom:12}}><label>Prix € HT *</label><input type="number" value={tarifForm.prix} onChange={e=>setTarifForm({...tarifForm,prix:e.target.value})} placeholder="250"/></div>}
-                      <div style={{display:"flex",gap:8}}>{tarifEdit!==null&&<button className="btn btn-outline btn-sm" onClick={()=>{setTarifEdit(null);setTarifForm({zone:"",label:"",prix:"",surDevis:false});}}>Annuler</button>}<button className="btn btn-gold btn-sm" disabled={!tarifForm.label.trim()||!tarifForm.zone||(!tarifForm.surDevis&&!tarifForm.prix)} onClick={saveTarif}>{tarifEdit!==null?"Enregistrer":"Ajouter"}</button></div>
+                      {/* Barème par taille (postes sur devis) : tranches libellé + montant.
+                          L'expert choisira une tranche pendant l'expertise retour. */}
+                      {tarifForm.surDevis&&(
+                        <div style={{marginBottom:12,padding:10,border:"1px dashed var(--border2)",background:"#fff"}}>
+                          <label style={{marginBottom:6}}>Barème par taille (facultatif)</label>
+                          {(tarifForm.bareme||[]).map((b,bi)=>(
+                            <div key={bi} style={{display:"flex",gap:6,marginBottom:6,alignItems:"center"}}>
+                              <input value={b.label} onChange={e=>{const nb=[...tarifForm.bareme];nb[bi]={...nb[bi],label:e.target.value};setTarifForm({...tarifForm,bareme:nb});}} placeholder="Ex: 5 à 30 cm — raccord peinture" style={{flex:1}}/>
+                              <input type="number" value={b.montant??""} onChange={e=>{const nb=[...tarifForm.bareme];nb[bi]={...nb[bi],montant:Number(e.target.value)||0};setTarifForm({...tarifForm,bareme:nb});}} placeholder="€ HT" style={{width:90}}/>
+                              <button className="btn btn-icon" style={{color:"var(--danger)"}} onClick={()=>setTarifForm({...tarifForm,bareme:tarifForm.bareme.filter((_,i)=>i!==bi)})}>🗑</button>
+                            </div>
+                          ))}
+                          <button className="btn btn-outline btn-sm" onClick={()=>setTarifForm({...tarifForm,bareme:[...(tarifForm.bareme||[]),{label:"",montant:0}]})}>+ Ajouter une tranche</button>
+                          <div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Sans tranche, le poste reste « sur devis » avec saisie libre du montant par l'expert.</div>
+                        </div>
+                      )}
+                      <div style={{display:"flex",gap:8}}>{tarifEdit!==null&&<button className="btn btn-outline btn-sm" onClick={()=>{setTarifEdit(null);setTarifForm({zone:"",label:"",prix:"",surDevis:false,bareme:[]});}}>Annuler</button>}<button className="btn btn-gold btn-sm" disabled={!tarifForm.label.trim()||!tarifForm.zone||(!tarifForm.surDevis&&!tarifForm.prix)} onClick={saveTarif}>{tarifEdit!==null?"Enregistrer":"Ajouter"}</button></div>
                     </div>
                   </div>
                 )}
