@@ -21,12 +21,16 @@ async function notifyRapportExpertise(dossier, tarifs, isUpdate) {
     const token = await auth.currentUser?.getIdToken();
     if (!token) { console.warn("📧 Alerte rapport non envoyée (utilisateur non authentifié)"); return; }
     const vt = getVetuste(dossier.info?.annee_fab);
+    const md = dossier.retour?.montants_devis || {};
     const total = (dossier.retour?.degats || []).reduce((s, id) => {
       const t = tarifs.find(t => t.id === id);
-      if (!t || t.surDevis || !t.prix) return s;
-      return s + prixAvecVetuste(t.prix, vt) * (dossier.retour?.quantites?.[id] || 1);
+      return s + montantPoste(t, dossier.retour?.quantites?.[id] || 1, vt, md);
     }, 0);
-    const surDevis = (dossier.retour?.degats || []).some(id => tarifs.find(t => t.id === id)?.surDevis);
+    // "+ postes sur devis" : uniquement s'il reste des postes sur devis SANS montant saisi
+    const surDevis = (dossier.retour?.degats || []).some(id => {
+      const t = tarifs.find(t => t.id === id);
+      return t?.surDevis && !md[id];
+    });
     const resp = await fetch("/api/notify-rapport", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
@@ -747,11 +751,14 @@ async function generateDepartHTML(dossier) {
 async function generateReportHTML(dossier, tarifs, zones, vetusteTaux) {
   const ret = dossier.retour;
   const info = dossier.info;
-  const total = (ret?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix)return s;return s+Math.round(t.prix*(1+vetusteTaux/100));},0);
+  const mdReport = ret?.montants_devis || {};
+  const total = (ret?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);return s+montantPoste(t,ret?.quantites?.[id]||1,vetusteTaux,mdReport);},0);
   const degatsHTML = (ret?.degats||[]).map(id=>{
     const t=tarifs.find(t=>t.id===id);
     if(!t) return '';
-    const prix = t.surDevis ? 'Sur devis' : Math.round(t.prix*(1+vetusteTaux/100))+'&nbsp;€';
+    const prix = t.surDevis
+      ? (mdReport[id] ? Number(mdReport[id]).toLocaleString('fr-FR')+'&nbsp;€' : 'Sur devis')
+      : Math.round(t.prix*(1+vetusteTaux/100))+'&nbsp;€';
     return `<tr><td style="padding:8px 12px;border-bottom:1px solid #e0e4ea;">${t.label}</td><td style="padding:8px 12px;border-bottom:1px solid #e0e4ea;text-align:right;font-weight:700;color:#1a2a6e;">${prix}</td></tr>`;
   }).join('');
 
@@ -818,6 +825,16 @@ function getVetuste(annee_fab) {
   return v?v.taux:(age>=10?-55:0);
 }
 function prixAvecVetuste(prix,taux) { return prix?Math.round(prix*(1+taux/100)):0; }
+// Montant retenu pour un poste de dégât :
+// - poste tarifé : prix catalogue avec vétusté × quantité
+// - poste "sur devis" : montant saisi EN DIRECT par l'expert (tel quel, sans
+//   vétusté — c'est le montant réel constaté), ou 0 si laissé "sur devis"
+function montantPoste(t, qte, taux, montantsDevis) {
+  if (!t) return 0;
+  if (t.surDevis) return Number(montantsDevis?.[t.id]) || 0;
+  if (!t.prix) return 0;
+  return prixAvecVetuste(t.prix, taux) * (qte || 1);
+}
 
 // Résumé lecture seule des tests (affiché dans les récapitulatifs / rapports)
 function TestNacelleSummary({ tests }) {
@@ -1023,6 +1040,7 @@ export default function App() {
       setRetTests(draft.data.retTests || {});
       setRetPhotos(draft.data.retPhotos || {});
       setRetDegats(draft.data.retDegats || []);
+      setRetMontantsDevis(draft.data.retMontantsDevis || {});
       setRetQtes(draft.data.retQtes || {});
       setRetNote(draft.data.retNote || "");
       setRetStep(draft.data.retStep || 1);
@@ -1042,6 +1060,8 @@ export default function App() {
   const [retZones,setRetZones]=useState({});
   const [retPhotos,setRetPhotos]=useState({});
   const [retDegats,setRetDegats]=useState([]);
+  // Montants saisis en direct pour les postes "sur devis" : { tarifId: montant € HT }
+  const [retMontantsDevis,setRetMontantsDevis]=useState({});
   const [retQtes,setRetQtes]=useState({}); // { tarifId: quantité } — 1 par défaut
   const [triPhoto,setTriPhoto]=useState(null);   // index de la photo "à trier" en cours d'affectation
   const [triFilter,setTriFilter]=useState("");   // recherche dans la liste d'affectation
@@ -1138,9 +1158,9 @@ export default function App() {
   // Auto-save RETOUR (brouillon)
   useEffect(()=>{
     if(view==="retour" && retStep >= 1) {
-      saveDraft("retour", { retForm, retZones, retTests, retPhotos, retDegats, retQtes, retNote, retStep, foundDossier, searchImmat, emailClient });
+      saveDraft("retour", { retForm, retZones, retTests, retPhotos, retDegats, retQtes, retMontantsDevis, retNote, retStep, foundDossier, searchImmat, emailClient });
     }
-  },[view, retForm, retZones, retTests, retPhotos, retDegats, retQtes, retNote, retStep, foundDossier, emailClient]);
+  },[view, retForm, retZones, retTests, retPhotos, retDegats, retQtes, retMontantsDevis, retNote, retStep, foundDossier, emailClient]);
 
   // Reprise retour : ré-injecte le dossier départ complet depuis la mémoire
   // (la liste "dossiers" se charge en asynchrone, et un brouillon tronqué ne contient que l'immat).
@@ -1595,6 +1615,7 @@ export default function App() {
     setRetTests(d.retour.tests || {});
     setRetPhotos(d.retour.photos || {});
     setRetDegats(d.retour.degats || []);
+    setRetMontantsDevis(d.retour.montants_devis || {});
     setRetQtes(d.retour.quantites || {});
     setRetNote(d.retour.note || "");
     setEmailClient(d.info?.email || "");
@@ -1715,6 +1736,7 @@ export default function App() {
         tests:retTests,
         degats:retDegats,
         quantites:retQtes,
+        montants_devis:retMontantsDevis, // montants saisis en direct sur les postes "sur devis"
         note:retNote,
         date:retForm.date,
         heures:retForm.heures,
@@ -1768,7 +1790,7 @@ export default function App() {
   function flash(msg) { setAdminMsg(msg); setTimeout(()=>setAdminMsg(""),2500); }
 
   const vetusteTaux = foundDossier ? getVetuste(foundDossier.info?.annee_fab) : 0;
-  const totalRetenue = retDegats.reduce((s,id)=>{ const t=tarifs.find(t=>t.id===id); if(!t||t.surDevis||!t.prix) return s; return s+prixAvecVetuste(t.prix,vetusteTaux)*(retQtes[id]||1); },0);
+  const totalRetenue = retDegats.reduce((s,id)=>{ const t=tarifs.find(t=>t.id===id); return s+montantPoste(t,retQtes[id]||1,vetusteTaux,retMontantsDevis); },0);
   // Les cycles archivés (allers-retours précédents) sont exclus des listes ; ils restent
   // consultables dans l'historique du rapport de chaque nacelle.
   const dossiersActifs = Object.values(dossiers).filter(d=>!d.archived);
@@ -2043,7 +2065,7 @@ export default function App() {
                   const tous=dossiersActifs;
                   const avecRetour=tous.filter(d=>d.retour);
                   const tousDegatIds=avecRetour.flatMap(d=>d.retour?.degats||[]);
-                  const montants=avecRetour.map(d=>{const vt=getVetuste(d.info?.annee_fab);return (d.retour?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix)return s;return s+prixAvecVetuste(t.prix,vt)*(d.retour?.quantites?.[id]||1);},0);});
+                  const montants=avecRetour.map(d=>{const vt=getVetuste(d.info?.annee_fab);return (d.retour?.degats||[]).reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);return s+montantPoste(t,d.retour?.quantites?.[id]||1,vt,d.retour?.montants_devis||{});},0);});
                   const totalGlobal=montants.reduce((s,m)=>s+m,0);
                   const moyenneRetenue=avecRetour.length?Math.round(totalGlobal/avecRetour.length):0;
                   const freqDegats=tousDegatIds.reduce((acc,id)=>{acc[id]=(acc[id]||0)+1;return acc;},{});
@@ -2512,7 +2534,7 @@ export default function App() {
                       <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
                         {!retForm.numero_cube&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Le N° de cube est obligatoire</div>}
                         {!retForm.lieu_restitution&&<div style={{fontSize:11,color:"var(--accent)"}}>⚠ Le lieu de restitution est obligatoire</div>}
-                        <button className="btn btn-gold" disabled={!retForm.numero_cube||!retForm.lieu_restitution} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetQtes({});setRetNote("");setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
+                        <button className="btn btn-gold" disabled={!retForm.numero_cube||!retForm.lieu_restitution} onClick={()=>{setRetZones({});setRetTests({});setRetPhotos({});setRetDegats([]);setRetQtes({});setRetMontantsDevis({});setRetNote("");setEmailClient(foundDossier?.info?.email||"");setEmailSent(false);setRetStep(1);}}>Démarrer expertise retour →</button>
                       </div>
                     </div>
                   </div>
@@ -2611,7 +2633,7 @@ export default function App() {
                       setRetZones({});
                       setRetTests({});
                       setRetPhotos({});
-                      setRetDegats([]);setRetQtes({});
+                      setRetDegats([]);setRetQtes({});setRetMontantsDevis({});
                       setRetNote("");
                       setEmailClient(d.info.email);
                       setEmailSent(false);
@@ -2837,13 +2859,20 @@ export default function App() {
                                     const dphotos=retPhotos[pkey]||[];
                                     return (
                                     <div key={t.id} style={{marginBottom:3}}>
-                                      <div className={`tarif-row ${checked?"active":""}`} style={{marginBottom:0}} onClick={()=>{const wasChecked=retDegats.includes(t.id);setRetDegats(prev=>wasChecked?prev.filter(d=>d!==t.id):[...prev,t.id]);setRetQtes(prev=>{const n={...prev};if(wasChecked){delete n[t.id];}else{n[t.id]=1;}return n;});}}>
+                                      <div className={`tarif-row ${checked?"active":""}`} style={{marginBottom:0}} onClick={()=>{const wasChecked=retDegats.includes(t.id);setRetDegats(prev=>wasChecked?prev.filter(d=>d!==t.id):[...prev,t.id]);setRetQtes(prev=>{const n={...prev};if(wasChecked){delete n[t.id];}else{n[t.id]=1;}return n;});setRetMontantsDevis(prev=>{if(!wasChecked)return prev;const n={...prev};delete n[t.id];return n;});}}>
                                         <div style={{display:"flex",alignItems:"center",gap:10}}>
                                           <div style={{width:16,height:16,border:`2px solid ${checked?"var(--primary)":"var(--border2)"}`,background:checked?"var(--primary)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",flexShrink:0}}>{checked?"✓":""}</div>
                                           <span style={{fontSize:13}}>{t.label}{checked&&(retQtes[t.id]||1)>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {retQtes[t.id]}</span>}</span>
                                         </div>
                                         {t.surDevis?(
-                                          <span style={{fontSize:11,color:"var(--accent)",fontWeight:700,fontFamily:"monospace",whiteSpace:"nowrap"}}>SUR DEVIS</span>
+                                          retMontantsDevis[t.id] ? (
+                                            <div style={{textAlign:"right",flexShrink:0}}>
+                                              <div className="mono" style={{color:"var(--primary)",fontSize:13,fontWeight:700}}>{Number(retMontantsDevis[t.id]).toLocaleString("fr-FR")} €</div>
+                                              <div style={{fontSize:9,color:"var(--muted)"}}>montant saisi</div>
+                                            </div>
+                                          ) : (
+                                            <span style={{fontSize:11,color:"var(--accent)",fontWeight:700,fontFamily:"monospace",whiteSpace:"nowrap"}}>SUR DEVIS</span>
+                                          )
                                         ):(
                                           <div style={{textAlign:"right",flexShrink:0}}>
                                             <div className="mono" style={{color:"var(--primary)",fontSize:13,fontWeight:700}}>{checked&&(retQtes[t.id]||1)>1?(prixAvecVetuste(t.prix,vetusteTaux)*(retQtes[t.id]||1)).toLocaleString("fr-FR"):prixAvecVetuste(t.prix,vetusteTaux)} €</div>
@@ -2860,6 +2889,21 @@ export default function App() {
                                             <span className="mono" style={{minWidth:30,textAlign:"center",fontSize:14,fontWeight:700,color:"var(--primary)"}}>{retQtes[t.id]||1}</span>
                                             <button type="button" style={{border:"none",background:"transparent",color:"var(--primary)",padding:"6px 14px",fontSize:16,fontWeight:700,cursor:"pointer",lineHeight:1}} onClick={(e)=>{e.stopPropagation();setRetQtes(prev=>({...prev,[t.id]:Math.min(99,(prev[t.id]||1)+1)}));}}>+</button>
                                           </div>
+                                          {/* Poste "sur devis" : montant chiffrable EN DIRECT par l'expert.
+                                              Laissé vide → reste "SUR DEVIS" (non compté dans le total). */}
+                                          {t.surDevis&&(
+                                            <>
+                                              <span style={{fontSize:10,letterSpacing:1.5,color:"var(--muted)",textTransform:"uppercase"}}>Montant € HT</span>
+                                              <input
+                                                type="number" min="0" step="1" inputMode="numeric"
+                                                placeholder="Sur devis"
+                                                value={retMontantsDevis[t.id]??""}
+                                                onClick={e=>e.stopPropagation()}
+                                                onChange={e=>{const v=e.target.value;setRetMontantsDevis(prev=>{const n={...prev};if(v===""||Number(v)<=0){delete n[t.id];}else{n[t.id]=Number(v);}return n;});}}
+                                                style={{width:110,padding:"6px 8px",border:"1px solid var(--border2)",fontSize:13,marginRight:10}}
+                                              />
+                                            </>
+                                          )}
                                           <span style={{fontSize:10,letterSpacing:1.5,color:"var(--muted)",textTransform:"uppercase",marginRight:4}}>Photos du dégât</span>
                                           {dphotos.map((p,i)=>(<div key={i} style={{position:"relative"}} onClick={(e)=>{e.stopPropagation();setLightboxUrl(p.url);}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn" title="Pivoter 90°" disabled={rotatingKey===pkey+"_"+i} onClick={(e)=>{e.stopPropagation();rotatePhotoAt(retPhotos,pkey,i,setRetPhotos);}} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===pkey+"_"+i?"…":"↻"}</button><button className="btn btn-danger" onClick={(e)=>{e.stopPropagation();removePhoto(pkey,i,setRetPhotos);}} style={{position:"absolute",top:2,right:2,padding:"2px 4px",fontSize:9}}>✕</button></div>))}
                                           <div className="photo-add" style={{width:64,height:48,fontSize:20}} onClick={async(e)=>{e.stopPropagation();const f=await pickFile({multiple:true});if(f) addPhotos(f,pkey,setRetPhotos);}}>+</div>
@@ -2938,7 +2982,7 @@ export default function App() {
                   {retDegats.length>0?(
                     <div>
                       <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,fontWeight:700}}>Dégâts retenus</div>
-                      {retDegats.map(id=>{const t=tarifs.find(t=>t.id===id);const dphotos=retPhotos[`degat_${id}`]||[];const q=retQtes[id]||1;return t?(<div key={id} style={{padding:"7px 0",borderBottom:"1px solid var(--border)"}}><div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span>{t.label}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span><span className="mono" style={{color:"var(--primary)",fontWeight:700}}>{t.surDevis?"SUR DEVIS":(q>1?`${q} × ${prixAvecVetuste(t.prix,vetusteTaux)} € = ${(prixAvecVetuste(t.prix,vetusteTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vetusteTaux)+" €")}</span></div>{dphotos.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>{dphotos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>}</div>):null;})}
+                      {retDegats.map(id=>{const t=tarifs.find(t=>t.id===id);const dphotos=retPhotos[`degat_${id}`]||[];const q=retQtes[id]||1;return t?(<div key={id} style={{padding:"7px 0",borderBottom:"1px solid var(--border)"}}><div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span>{t.label}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span><span className="mono" style={{color:"var(--primary)",fontWeight:700}}>{t.surDevis?(retMontantsDevis[id]?`${Number(retMontantsDevis[id]).toLocaleString("fr-FR")} €`:"SUR DEVIS"):(q>1?`${q} × ${prixAvecVetuste(t.prix,vetusteTaux)} € = ${(prixAvecVetuste(t.prix,vetusteTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vetusteTaux)+" €")}</span></div>{dphotos.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>{dphotos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>}</div>):null;})}
                       {vetusteTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Taux de vétusté appliqué : {vetusteTaux}%</div>}
                       <div className="total-strip" style={{marginTop:10}}>
                         <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>TOTAL RETENUE HT</span>
@@ -3116,10 +3160,10 @@ export default function App() {
                     const q=activeDossier.retour?.quantites?.[id]||1;
                     return t?(<div key={id} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--border)",fontSize:13,alignItems:"center"}}>
                       <span style={{flex:1,paddingRight:16}}>{t.label}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span>
-                      <span className="mono" style={{color:"var(--primary)",fontWeight:700,whiteSpace:"nowrap"}}>{t.surDevis?"Sur devis":(q>1?`${q} × ${prixAvecVetuste(t.prix,vTaux)} € = ${(prixAvecVetuste(t.prix,vTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vTaux)+" €")}</span>
+                      <span className="mono" style={{color:"var(--primary)",fontWeight:700,whiteSpace:"nowrap"}}>{t.surDevis?((activeDossier.retour?.montants_devis?.[id])?Number(activeDossier.retour.montants_devis[id]).toLocaleString("fr-FR")+" €":"Sur devis"):(q>1?`${q} × ${prixAvecVetuste(t.prix,vTaux)} € = ${(prixAvecVetuste(t.prix,vTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vTaux)+" €")}</span>
                     </div>):null;
                   })}
-                  {(()=>{ const vTaux=getVetuste(activeDossier.info?.annee_fab); const total=activeDossier.retour.degats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);if(!t||t.surDevis||!t.prix) return s;return s+prixAvecVetuste(t.prix,vTaux)*(activeDossier.retour?.quantites?.[id]||1);},0); return (
+                  {(()=>{ const vTaux=getVetuste(activeDossier.info?.annee_fab); const total=activeDossier.retour.degats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);return s+montantPoste(t,activeDossier.retour?.quantites?.[id]||1,vTaux,activeDossier.retour?.montants_devis||{});},0); return (
                     <div>
                       {vTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6,textAlign:"right"}}>Taux de vétusté : {vTaux}% — {activeDossier.info?.annee_fab}</div>}
                       <div className="total-strip" style={{marginTop:10}}>
