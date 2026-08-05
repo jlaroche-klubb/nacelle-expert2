@@ -107,6 +107,12 @@ export default async function handler(req, res) {
     const recu = d.devis_recu || {};
     const taux = getVetuste(info.annee_fab);
 
+    // Photos des dégâts (mêmes données que la page de chiffrage atelier)
+    const photosOf = (id) => {
+      const arr = (retour.photos && retour.photos["degat_" + id]) || [];
+      return arr.map((p) => p && p.url).filter(Boolean);
+    };
+
     let total = 0;
     let nbAttente = 0;
     const rows = degats.map((id) => {
@@ -135,17 +141,21 @@ export default async function handler(req, res) {
         total += m;
         montantHtml = q > 1 ? `${q} × ${eur(unit)} € = <b>${eur(m)} €</b>` : `<b>${eur(m)} €</b>`;
       }
-      return `<tr style="border-bottom:1px solid #e4e7f0;">
+      const photos = photosOf(id).map((u) =>
+        `<a href="${esc(u)}" target="_blank"><img src="${esc(u)}" alt="" style="width:86px;height:64px;object-fit:cover;border:1px solid #ccd;border-radius:4px;margin:2px;"></a>`
+      ).join("");
+      return `<tr style="${photos ? "" : "border-bottom:1px solid #e4e7f0;"}">
         <td style="padding:8px 10px;">${esc(label)}${tranche ? ` <span style="color:#888;font-size:12px;">(${esc(tranche)})</span>` : ""}${q > 1 ? ` <span style="color:#1a2a6e;font-weight:700;">× ${q}</span>` : ""}</td>
         <td style="padding:8px 10px;text-align:right;white-space:nowrap;">${montantHtml}</td>
-      </tr>`;
+      </tr>${photos ? `<tr style="border-bottom:1px solid #e4e7f0;"><td colspan="2" style="padding:0 10px 8px;">${photos}</td></tr>` : ""}`;
     }).join("");
 
     const definitif = nbAttente === 0;
     const valide = d.devis_valide || null;
 
     const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow"><title>Rapport de restitution · Nacelle ${esc(immat)}</title></head>
+<meta name="robots" content="noindex,nofollow"><title>Rapport de restitution · Nacelle ${esc(immat)}</title>
+<style>@media print{.no-print{display:none!important;}body{background:#fff!important;}a{text-decoration:none;color:inherit;}}</style></head>
 <body style="margin:0;font-family:Arial,sans-serif;background:#f0f2f5;">
 <div style="max-width:640px;margin:0 auto;padding:20px;">
   <div style="background:#1a2a6e;color:#fff;padding:18px 22px;border-radius:8px 8px 0 0;">
@@ -158,6 +168,9 @@ export default async function handler(req, res) {
       <tr><td style="color:#888;padding:3px 14px 3px 0;">Client</td><td>${esc(info.client || "—")}${info.contrat ? ` (contrat ${esc(info.contrat)})` : ""}</td></tr>
       <tr><td style="color:#888;padding:3px 14px 3px 0;">Date de retour</td><td>${esc(frDate(retour.date))}</td></tr>
       ${retour.lieu_restitution ? `<tr><td style="color:#888;padding:3px 14px 3px 0;">Lieu de restitution</td><td>${esc(retour.lieu_restitution)}</td></tr>` : ""}
+      ${retour.agent ? `<tr><td style="color:#888;padding:3px 14px 3px 0;">Expert</td><td>${esc(retour.agent)}</td></tr>` : ""}
+      ${retour.heures ? `<tr><td style="color:#888;padding:3px 14px 3px 0;">Heures au retour</td><td>${esc(retour.heures)} h</td></tr>` : ""}
+      ${retour.km_porteur ? `<tr><td style="color:#888;padding:3px 14px 3px 0;">Km porteur</td><td>${esc(retour.km_porteur)} km</td></tr>` : ""}
     </table>
 
     <h3 style="color:#1a2a6e;border-bottom:2px solid #1a2a6e;padding-bottom:6px;margin:20px 0 0;">Dégâts retenus</h3>
@@ -172,9 +185,13 @@ export default async function handler(req, res) {
       <span style="font-size:26px;font-weight:700;">${eur(total)} €</span>
     </div>
     ${valide ? `<div style="font-size:12px;color:#1e7e46;margin-top:8px;">✓ Devis validé${valide.par ? ` par ${esc(valide.par)}` : ""}${valide.date ? ` le ${esc(frDate(valide.date))}` : ""}.</div>` : ""}
+    ${retour.note ? `<div style="margin-top:14px;font-size:13px;"><b style="color:#1a2a6e;">Notes de l'expert :</b> ${esc(retour.note)}</div>` : ""}
 
-    ${pdfUrl ? `<p style="margin-top:20px;"><a href="${esc(pdfUrl)}" style="background:#1a2a6e;color:#fff;padding:10px 22px;text-decoration:none;font-weight:bold;border-radius:4px;">&#128196; Rapport d'expertise complet (photos)</a></p>
-    <p style="font-size:11px;color:#999;">Le PDF détaille l'état de la machine et les photos. Les montants ci-dessus font foi${definitif ? "" : " une fois le chiffrage terminé"} : le PDF a pu être édité avant le chiffrage des postes sur devis.</p>` : ""}
+    <div class="no-print" style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <a href="javascript:window.print()" style="background:#1a2a6e;color:#fff;padding:10px 22px;text-decoration:none;font-weight:bold;border-radius:4px;">&#128424; Télécharger / imprimer en PDF</a>
+      ${pdfUrl ? `<a href="${esc(pdfUrl)}" style="background:#fff;color:#1a2a6e;border:1px solid #1a2a6e;padding:9px 22px;text-decoration:none;font-weight:bold;border-radius:4px;">&#128196; Expertise signée${retour.date ? ` du ${esc(frDate(retour.date))}` : ""}</a>` : ""}
+    </div>
+    ${pdfUrl ? `<p class="no-print" style="font-size:11px;color:#999;margin-top:8px;">L'expertise signée est le document d'origine (état complet, photos, signatures), édité le jour de la restitution — avant chiffrage des postes sur devis. Les montants du présent rapport font foi.</p>` : ""}
   </div>
   <div style="font-size:11px;color:#999;padding:10px 4px;">Delta Services · 14 Avenue James de Rothschild · 77164 Ferrières-en-Brie · Tél. +33 (0)1 60 95 47 80</div>
 </div>
