@@ -17,13 +17,23 @@ if (!admin.apps.length) {
   });
 }
 
-// Destinataires fixes de l'alerte (côté serveur : non modifiable depuis le navigateur)
-// ⚠ PHASE DE TEST : envoi à Jonathan uniquement. Une fois validé, rétablir la liste complète :
+// Destinataires par défaut si rien n'est configuré dans Admin → Emails
+// (document Firestore config/emails, champ retour_to).
+// ⚠ PHASE DE TEST : Jonathan uniquement. Liste complète prévue :
 // nneguy@klubb.com, gcloarec@delta-services.fr, bbenavente@delta-services.fr,
 // anebotsaudin@delta-services.fr, rbourdin@delta-services.fr, jbessadet@delta-services.fr
-const RECIPIENTS = [
+const DEFAULT_RECIPIENTS = [
   "jlaroche@klubb.com",
 ];
+
+async function getRecipients() {
+  try {
+    const snap = await admin.firestore().collection("config").doc("emails").get();
+    const cfg = snap.exists ? snap.data() : {};
+    if (Array.isArray(cfg.retour_to) && cfg.retour_to.length) return cfg.retour_to;
+  } catch { /* défaut conservé */ }
+  return DEFAULT_RECIPIENTS;
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -53,6 +63,7 @@ export default async function handler(req, res) {
       return;
     }
     const senderName = process.env.BREVO_SENDER_NAME || "Nacelle Expert · Delta Services";
+    const RECIPIENTS = await getRecipients();
 
     const esc = (s) => String(s ?? "—").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
     const row = (label, value, alt) =>

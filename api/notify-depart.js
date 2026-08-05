@@ -20,8 +20,18 @@ if (!admin.apps.length) {
   });
 }
 
-// Copie fixe (côté serveur : non modifiable depuis le navigateur)
-const CC_RECIPIENTS = ["assistanat.commerce@delta-services.fr"];
+// Copie par défaut si rien n'est configuré dans Admin → Emails (config/emails, cc_assistanat)
+const DEFAULT_CC = ["assistanat.commerce@delta-services.fr"];
+
+async function getCc() {
+  try {
+    const snap = await admin.firestore().collection("config").doc("emails").get();
+    const cfg = snap.exists ? snap.data() : {};
+    if (Array.isArray(cfg.cc_assistanat) && cfg.cc_assistanat.length) return cfg.cc_assistanat;
+    if (typeof cfg.cc_assistanat === "string" && cfg.cc_assistanat) return [cfg.cc_assistanat];
+  } catch { /* défaut conservé */ }
+  return DEFAULT_CC;
+}
 
 const APP_URL = "https://nacelle-expert2.vercel.app";
 
@@ -86,7 +96,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         sender: { email: senderEmail, name: senderName },
         to: [{ email: clientEmail }],
-        cc: CC_RECIPIENTS.map((email) => ({ email })),
+        cc: (await getCc()).map((email) => ({ email })),
         subject: `État de départ · Nacelle ${b.immat}`,
         htmlContent: html,
       }),

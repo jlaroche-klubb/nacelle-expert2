@@ -15,6 +15,52 @@ const PAGE_DOSSIERS = 60; // pagination : nombre de dossiers chargés par page (
 // L'envoi est fait CÔTÉ SERVEUR par la fonction Vercel /api/notify-rapport
 // (destinataires fixes définis dans api/notify-rapport.js, envoi via Gmail).
 // Silencieux en cas d'échec : ne bloque jamais la sauvegarde de l'expertise.
+// ─── Dossier « En attente de devis » : alerte atelier + rapport provisoire client ───
+// Appelé à la validation d'une expertise retour contenant des postes sur devis
+// non chiffrés. Silencieux en cas d'échec : ne bloque jamais la sauvegarde.
+async function notifyDevisEnAttente(dossier, tarifs) {
+  if (!dossier?.immat || !dossier.devis_pending?.length) return;
+  try {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) { console.warn("📧 Alerte devis non envoyée (non authentifié)"); return; }
+    const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + token };
+    const postes = dossier.devis_pending.map(id => (tarifs.find(t => t.id === id) || {}).label || id);
+    // 1) Alerte « devis à faire » à l'atelier Nacelle Assistance (lien de saisie inclus)
+    const r1 = await fetch("/api/notify-devis", {
+      method: "POST", headers,
+      body: JSON.stringify({
+        immat: dossier.immat,
+        modele: dossier.info?.modele || "—",
+        type_nacelle: dossier.info?.type_nacelle || "—",
+        client: dossier.info?.client || "—",
+        contrat: dossier.info?.contrat || "—",
+        lieu_restitution: dossier.retour?.lieu_restitution || "—",
+        agent: dossier.retour?.agent || "—",
+        postes,
+        cle: dossier.devis_token,
+      }),
+    });
+    if (!r1.ok) console.error("❌ Alerte devis :", r1.status, await r1.text());
+    else console.log("📧 Alerte devis envoyée à l'atelier");
+    // 2) Rapport PROVISOIRE au client (mention « en attente de devis »)
+    if (dossier.info?.email) {
+      const r2 = await fetch("/api/notify-retour-client", {
+        method: "POST", headers,
+        body: JSON.stringify({
+          immat: dossier.immat,
+          email_client: dossier.info.email,
+          modele: dossier.info?.modele || "",
+          type_nacelle: dossier.info?.type_nacelle || "",
+          provisoire: true,
+          nb_attente: dossier.devis_pending.length,
+        }),
+      });
+      if (!r2.ok) console.error("❌ Rapport provisoire client :", r2.status, await r2.text());
+      else console.log("📧 Rapport provisoire envoyé au client");
+    }
+  } catch (e) { console.error("notifyDevisEnAttente:", e); }
+}
+
 async function notifyRapportExpertise(dossier, tarifs, isUpdate) {
   if (!dossier?.immat) return;
   try {
@@ -981,6 +1027,9 @@ export default function App() {
   const [zoneForm,setZoneForm]=useState({label:"",icon:"⟋"});
   const [zoneEdit,setZoneEdit]=useState(null);
   const [tarifForm,setTarifForm]=useState({zone:"",label:"",prix:"",surDevis:false,bareme:[]});
+  // Admin → Emails : destinataires des envois automatiques (une adresse par ligne)
+  const [emailsCfg,setEmailsCfg]=useState({retour_to:"",devis_to:"",cc_assistanat:""});
+  const [emailsCfgLoaded,setEmailsCfgLoaded]=useState(false);
   const [tarifEdit,setTarifEdit]=useState(null);
 
   const [depForm,setDepForm]=useState({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:""});
@@ -1303,6 +1352,16 @@ export default function App() {
       docsList.forEach(d => { result[d.id] = d.data(); });
       setDossiers(result);
       const zC=await fbGetConfig("zones"); if(zC?.data) setZones(zC.data);
+      // Destinataires des envois automatiques (Admin → Emails)
+      try {
+        const eC=await fbGetConfig("emails");
+        if(eC) setEmailsCfg({
+          retour_to:(eC.retour_to||[]).join("\n"),
+          devis_to:(eC.devis_to||[]).join("\n"),
+          cc_assistanat:(Array.isArray(eC.cc_assistanat)?eC.cc_assistanat:[eC.cc_assistanat].filter(Boolean)).join("\n"),
+        });
+        setEmailsCfgLoaded(true);
+      } catch(e){ console.warn("Config emails non chargée:", e); }
       const tnC=await fbGetConfig("types_nacelle"); if(tnC?.data?.length) setTypesNacelle(tnC.data);
       const tC=await fbGetConfig("tarifs");
       if(tC?.data){
@@ -1826,6 +1885,39 @@ export default function App() {
       updatedBy: currentUser?.uid || null,
       updatedByName: userProfile ? `${userProfile.prenom} ${userProfile.nom}` : retForm.agent
     };
+    // ─── DEVIS EN ATTENTE ───
+    // Postes "sur devis" cochés SANS montant chiffré → le dossier passe en
+    // « En attente de devis » : jeton d'accès pour l'atelier Nacelle Assistance
+    // (page de saisie liée à ce seul dossier), alerte email, et mention
+    // provisoire dans le rapport client.
+    {
+      const pendingIds = retDegats.filter(id => {
+        const t = tarifs.find(t => t.id === id);
+        return t?.surDevis && !retMontantsDevis[id];
+      });
+      if (pendingIds.length) {
+        updated.devis_pending = pendingIds;
+        // Libellés stockés avec le dossier : affichés tels quels côté Delta VO (badge secrétaire)
+        updated.devis_pending_labels = pendingIds.map(id => (tarifs.find(t => t.id === id) || {}).label || id);
+        updated.devis_complet = false;
+        // Conserver le jeton existant si on re-valide le même dossier (le lien
+        // déjà envoyé à l'atelier reste valable) ; sinon en générer un nouveau.
+        if (foundDossier.devis_token) {
+          updated.devis_token = foundDossier.devis_token;
+          updated.devis_token_created = foundDossier.devis_token_created;
+        } else {
+          const bytes = new Uint8Array(24);
+          crypto.getRandomValues(bytes);
+          updated.devis_token = Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+          updated.devis_token_created = new Date().toISOString();
+        }
+        updated.devis_recu = foundDossier.devis_recu || {};
+      } else if (foundDossier.devis_pending?.length) {
+        // Le dossier était en attente et tout est désormais chiffré (re-validation)
+        updated.devis_pending = [];
+        updated.devis_complet = true;
+      }
+    }
     delete updated._renamedFrom; // champ de travail : ne pas persister
     await fbSaveDossier(updated);
     if (isRenamed) {
@@ -1834,6 +1926,21 @@ export default function App() {
     }
     setDossiers(prev=>{ const n={...prev,[updated.immat]:updated}; if(isRenamed) delete n[renamedFrom]; return n; });
     setActiveDossier(updated); return updated;
+  }
+
+  // Admin → Emails : enregistre les destinataires des envois automatiques
+  async function saveEmailsCfg() {
+    const parse=(s)=>String(s||"").split(/[\n,;]+/).map(x=>x.trim()).filter(Boolean);
+    const bad=[...parse(emailsCfg.retour_to),...parse(emailsCfg.devis_to),...parse(emailsCfg.cc_assistanat)]
+      .filter(e=>!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+    if(bad.length){ alert("Adresse(s) invalide(s) :\n"+bad.join("\n")); return; }
+    await fbSaveConfig("emails",{
+      retour_to:parse(emailsCfg.retour_to),
+      devis_to:parse(emailsCfg.devis_to),
+      cc_assistanat:parse(emailsCfg.cc_assistanat),
+      updatedAt:new Date().toISOString(),
+    });
+    flash("Destinataires enregistrés ✓");
   }
 
   async function saveZone() {
@@ -1876,7 +1983,7 @@ export default function App() {
   const dossiersActifs = Object.values(dossiers).filter(d=>!d.archived);
   const filteredDossiers = dossiersActifs.filter(d=>{
     const matchQ = !searchQ||[d.immat,d.info?.client,d.info?.contrat].some(v=>v?.toLowerCase?.().includes(searchQ.toLowerCase()));
-    const matchStatut = filterStatut==="tous" || (filterStatut==="retour"&&d.retour) || (filterStatut==="location"&&!d.retour&&!d.depart?.sansDossier) || (filterStatut==="sans_depart"&&d.depart?.sansDossier&&!d.retour);
+    const matchStatut = filterStatut==="tous" || (filterStatut==="retour"&&d.retour&&!d.devis_pending?.length) || (filterStatut==="location"&&!d.retour&&!d.depart?.sansDossier) || (filterStatut==="sans_depart"&&d.depart?.sansDossier&&!d.retour) || (filterStatut==="attente_devis"&&d.devis_pending?.length);
     return matchQ && matchStatut;
   });
 
@@ -2192,7 +2299,7 @@ export default function App() {
             </div>
             <input placeholder="Rechercher immatriculation, client, contrat..." value={searchQ} onChange={e=>setSearchQ(e.target.value)} style={{marginBottom:10}}/>
             <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
-              {[["tous","Tous",dossiersActifs.length],["location","En location",dossiersActifs.filter(d=>!d.retour&&!d.depart?.sansDossier).length],["retour","Retour traité",dossiersActifs.filter(d=>d.retour).length],["sans_depart","Sans départ",dossiersActifs.filter(d=>d.depart?.sansDossier&&!d.retour).length]].map(([val,label,count])=>(
+              {[["tous","Tous",dossiersActifs.length],["location","En location",dossiersActifs.filter(d=>!d.retour&&!d.depart?.sansDossier).length],["retour","Retour traité",dossiersActifs.filter(d=>d.retour&&!d.devis_pending?.length).length],["sans_depart","Sans départ",dossiersActifs.filter(d=>d.depart?.sansDossier&&!d.retour).length],["attente_devis","⏳ En attente de devis",dossiersActifs.filter(d=>d.devis_pending?.length).length]].map(([val,label,count])=>(
                 <button key={val} onClick={()=>setFilterStatut(val)} style={{padding:"5px 12px",border:`1px solid ${filterStatut===val?"var(--primary)":"var(--border2)"}`,background:filterStatut===val?"var(--primary)":"#fff",color:filterStatut===val?"#fff":"var(--text)",fontSize:12,fontWeight:filterStatut===val?700:500,cursor:"pointer",fontFamily:"inherit",borderRadius:2,transition:"all .15s"}}>
                   {label} <span style={{opacity:.7}}>({count})</span>
                 </button>
@@ -2210,7 +2317,7 @@ export default function App() {
                   </div>
                   <div style={{display:"flex",gap:8,alignItems:"center"}}>
                     <span style={{fontSize:11,color:"var(--muted)"}}>{d.depart?.date}</span>
-                    <span className={`badge ${d.retour?"badge-ok":d.depart?.sansDossier?"badge-danger":"badge-warn"}`}>{d.retour?"Retour traité":d.depart?.sansDossier?"Sans départ":"En location"}</span>
+                    <span className={`badge ${d.devis_pending?.length?"badge-warn":d.retour?"badge-ok":d.depart?.sansDossier?"badge-danger":"badge-warn"}`}>{d.devis_pending?.length?"⏳ Attente devis":d.retour?"Retour traité":d.depart?.sansDossier?"Sans départ":"En location"}</span>
                   </div>
                 </div>
               </div>
@@ -3103,10 +3210,15 @@ export default function App() {
                       <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,fontWeight:700}}>Dégâts retenus</div>
                       {retDegats.map(id=>{const t=tarifs.find(t=>t.id===id);const dphotos=retPhotos[`degat_${id}`]||[];const q=retQtes[id]||1;return t?(<div key={id} style={{padding:"7px 0",borderBottom:"1px solid var(--border)"}}><div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span>{t.label}{retTranchesDevis[id]&&retTranchesDevis[id]!=="__LIBRE__"&&<span style={{marginLeft:6,fontSize:11,color:"var(--muted)"}}>({retTranchesDevis[id]})</span>}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span><span className="mono" style={{color:"var(--primary)",fontWeight:700}}>{t.surDevis?(retMontantsDevis[id]?`${Number(retMontantsDevis[id]).toLocaleString("fr-FR")} €`:"SUR DEVIS"):(q>1?`${q} × ${prixAvecVetuste(t.prix,vetusteTaux)} € = ${(prixAvecVetuste(t.prix,vetusteTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vetusteTaux)+" €")}</span></div>{dphotos.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>{dphotos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>}</div>):null;})}
                       {vetusteTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Taux de vétusté appliqué : {vetusteTaux}%</div>}
-                      <div className="total-strip" style={{marginTop:10}}>
-                        <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>TOTAL RETENUE HT</span>
-                        <span style={{fontFamily:"'Share Tech Mono'",fontSize:28,fontWeight:700}}>{totalRetenue.toLocaleString("fr-FR")} €</span>
+                      {(()=>{ const nbAttente=retDegats.filter(id=>{const t=tarifs.find(t=>t.id===id);return t?.surDevis&&!retMontantsDevis[id];}).length; return (
+                      <div>
+                        {nbAttente>0&&<div style={{marginTop:8,padding:"8px 12px",background:"#fdf3ec",border:"1px solid #e8c9a8",borderRadius:4,fontSize:13,fontWeight:600,color:"#b3541e"}}>⏳ {nbAttente} poste{nbAttente>1?"s":""} en attente de devis — le montant définitif sera communiqué après chiffrage.</div>}
+                        <div className="total-strip" style={{marginTop:10}}>
+                          <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>{nbAttente>0?"TOTAL PROVISOIRE HT":"TOTAL RETENUE HT"}</span>
+                          <span style={{fontFamily:"'Share Tech Mono'",fontSize:28,fontWeight:700}}>{totalRetenue.toLocaleString("fr-FR")} €</span>
+                        </div>
                       </div>
+                      ); })()}
                     </div>
                   ):(<div style={{padding:"12px 0",color:"#208040",fontWeight:600}}>✓ Aucun dégât — nacelle rendue conforme</div>)}
                 </div>
@@ -3150,6 +3262,8 @@ export default function App() {
                       setView("rapport");
                       // Alerte automatique aux destinataires fixes (avec lien du rapport) — non bloquant
                       if(d) notifyRapportExpertise(d, tarifs, hadRetour);
+                      // ⏳ Postes en attente de devis → alerte atelier + rapport provisoire client
+                      if(d?.devis_pending?.length) notifyDevisEnAttente(d, tarifs);
                     } finally {
                       setSavingRetour(false);
                     }
@@ -3282,11 +3396,12 @@ export default function App() {
                       <span className="mono" style={{color:"var(--primary)",fontWeight:700,whiteSpace:"nowrap"}}>{t.surDevis?((activeDossier.retour?.montants_devis?.[id])?Number(activeDossier.retour.montants_devis[id]).toLocaleString("fr-FR")+" €":"Sur devis"):(q>1?`${q} × ${prixAvecVetuste(t.prix,vTaux)} € = ${(prixAvecVetuste(t.prix,vTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vTaux)+" €")}</span>
                     </div>):null;
                   })}
-                  {(()=>{ const vTaux=getVetuste(activeDossier.info?.annee_fab); const total=activeDossier.retour.degats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);return s+montantPoste(t,activeDossier.retour?.quantites?.[id]||1,vTaux,activeDossier.retour?.montants_devis||{});},0); return (
+                  {(()=>{ const vTaux=getVetuste(activeDossier.info?.annee_fab); const total=activeDossier.retour.degats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);return s+montantPoste(t,activeDossier.retour?.quantites?.[id]||1,vTaux,activeDossier.retour?.montants_devis||{});},0); const nbAttente=activeDossier.devis_pending?.length||0; return (
                     <div>
                       {vTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6,textAlign:"right"}}>Taux de vétusté : {vTaux}% — {activeDossier.info?.annee_fab}</div>}
+                      {nbAttente>0&&<div style={{marginTop:8,padding:"8px 12px",background:"#fdf3ec",border:"1px solid #e8c9a8",borderRadius:4,fontSize:13,fontWeight:600,color:"#b3541e"}}>⏳ {nbAttente} poste{nbAttente>1?"s":""} en attente de devis — le montant définitif sera communiqué après chiffrage.</div>}
                       <div className="total-strip" style={{marginTop:10}}>
-                        <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>TOTAL RETENUE HT</span>
+                        <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>{nbAttente>0?"TOTAL PROVISOIRE HT":"TOTAL RETENUE HT"}</span>
                         <span style={{fontFamily:"'Share Tech Mono'",fontSize:28,fontWeight:700}}>{total.toLocaleString("fr-FR")} €</span>
                       </div>
                     </div>
@@ -3416,7 +3531,7 @@ export default function App() {
                   <button className="btn btn-icon" onClick={()=>{setAdminOpen(false);setAdminAuthed(false);}}>✕</button>
                 </div>
                 <div style={{display:"flex",borderBottom:"2px solid var(--primary)",marginBottom:18}}>
-                  {[[" zones","Zones"],["tarifs","Postes tarifaires"],["types","Types nacelle"],["dossiers","Dossiers"],["users","Utilisateurs"]].map(([id,label])=>(<div key={id} className={`tab ${adminTab===id?"active":""}`} onClick={()=>{setAdminTab(id);setZoneEdit(null);setTarifEdit(null);loadUsers();}}>{label}</div>))}
+                  {[[" zones","Zones"],["tarifs","Postes tarifaires"],["types","Types nacelle"],["dossiers","Dossiers"],["users","Utilisateurs"],["emails","📧 Emails"]].map(([id,label])=>(<div key={id} className={`tab ${adminTab===id?"active":""}`} onClick={()=>{setAdminTab(id);setZoneEdit(null);setTarifEdit(null);loadUsers();}}>{label}</div>))}
                 </div>
                 {adminMsg&&<div style={{padding:"8px 12px",background:"rgba(48,160,80,.1)",color:"#208040",border:"1px solid rgba(48,160,80,.3)",fontSize:13,marginBottom:14}}>{adminMsg}</div>}
                 {adminTab==="zones"&&(
@@ -3518,6 +3633,30 @@ export default function App() {
                       )}
                       <div style={{display:"flex",gap:8}}>{tarifEdit!==null&&<button className="btn btn-outline btn-sm" onClick={()=>{setTarifEdit(null);setTarifForm({zone:"",label:"",prix:"",surDevis:false,bareme:[]});}}>Annuler</button>}<button className="btn btn-gold btn-sm" disabled={!tarifForm.label.trim()||!tarifForm.zone||(!tarifForm.surDevis&&!tarifForm.prix)} onClick={saveTarif}>{tarifEdit!==null?"Enregistrer":"Ajouter"}</button></div>
                     </div>
+                  </div>
+                )}
+                {adminTab==="emails"&&(
+                  <div>
+                    <div style={{fontSize:12,color:"var(--muted)",marginBottom:14}}>
+                      Destinataires des envois automatiques. Une adresse par ligne. Laisser vide = valeurs par défaut.
+                      {!emailsCfgLoaded&&<span style={{color:"var(--accent)"}}> (première configuration : les champs vides utilisent les défauts actuels)</span>}
+                    </div>
+                    <div style={{marginBottom:12}}>
+                      <label>🔔 Alerte expertise retour (interne)</label>
+                      <textarea rows={4} value={emailsCfg.retour_to} onChange={e=>setEmailsCfg({...emailsCfg,retour_to:e.target.value})} placeholder={"jlaroche@klubb.com\nnneguy@klubb.com\n..."} style={{width:"100%",fontFamily:"monospace",fontSize:13}}/>
+                      <div style={{fontSize:11,color:"var(--muted)"}}>Reçoivent l'alerte à chaque validation d'expertise retour (total retenue + lien rapport).</div>
+                    </div>
+                    <div style={{marginBottom:12}}>
+                      <label>⏳ Alerte devis à chiffrer (atelier Nacelle Assistance)</label>
+                      <textarea rows={3} value={emailsCfg.devis_to} onChange={e=>setEmailsCfg({...emailsCfg,devis_to:e.target.value})} placeholder="atelier@nacelle-assistance.fr" style={{width:"100%",fontFamily:"monospace",fontSize:13}}/>
+                      <div style={{fontSize:11,color:"var(--muted)"}}>Reçoivent le lien de saisie du devis quand une expertise contient des postes non chiffrés.</div>
+                    </div>
+                    <div style={{marginBottom:14}}>
+                      <label>📋 Copie des envois client (assistanat)</label>
+                      <textarea rows={2} value={emailsCfg.cc_assistanat} onChange={e=>setEmailsCfg({...emailsCfg,cc_assistanat:e.target.value})} placeholder="assistanat.commerce@delta-services.fr" style={{width:"100%",fontFamily:"monospace",fontSize:13}}/>
+                      <div style={{fontSize:11,color:"var(--muted)"}}>En copie des rapports envoyés automatiquement aux clients (état de départ, rapport de restitution).</div>
+                    </div>
+                    <button className="btn btn-gold" onClick={saveEmailsCfg}>✓ Enregistrer</button>
                   </div>
                 )}
                 {adminTab==="users"&&(
