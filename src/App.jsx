@@ -481,7 +481,7 @@ label{font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--m
 .admin-row{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);margin-bottom:4px;background:#f8f9fb;}
 .icon-btn{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);cursor:pointer;font-size:16px;transition:all .15s;}
 .icon-btn:hover,.icon-btn.sel{border-color:var(--primary);background:rgba(26,42,110,.08);}
-.tab{padding:8px 18px;cursor:pointer;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;border-bottom:2px solid transparent;transition:all .2s;color:var(--muted);}
+.tab{padding:8px 14px;cursor:pointer;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;font-weight:700;border-bottom:2px solid transparent;transition:all .2s;color:var(--muted);white-space:nowrap;flex-shrink:0;}
 .tab.active{color:var(--primary);border-bottom-color:var(--primary);}
 .accent-bar{height:4px;background:linear-gradient(90deg,var(--primary),var(--accent));}
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
@@ -3530,7 +3530,7 @@ export default function App() {
                   <div style={{fontFamily:"'Share Tech Mono'",fontSize:15,color:"var(--primary)",letterSpacing:3}}>ADMINISTRATION</div>
                   <button className="btn btn-icon" onClick={()=>{setAdminOpen(false);setAdminAuthed(false);}}>✕</button>
                 </div>
-                <div style={{display:"flex",borderBottom:"2px solid var(--primary)",marginBottom:18}}>
+                <div style={{display:"flex",flexWrap:"wrap",borderBottom:"2px solid var(--primary)",marginBottom:18}}>
                   {[[" zones","Zones"],["tarifs","Postes tarifaires"],["types","Types nacelle"],["dossiers","Dossiers"],["users","Utilisateurs"],["emails","📧 Emails"]].map(([id,label])=>(<div key={id} className={`tab ${adminTab===id?"active":""}`} onClick={()=>{setAdminTab(id);setZoneEdit(null);setTarifEdit(null);loadUsers();}}>{label}</div>))}
                 </div>
                 {adminMsg&&<div style={{padding:"8px 12px",background:"rgba(48,160,80,.1)",color:"#208040",border:"1px solid rgba(48,160,80,.3)",fontSize:13,marginBottom:14}}>{adminMsg}</div>}
