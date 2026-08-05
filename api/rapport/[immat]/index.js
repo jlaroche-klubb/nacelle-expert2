@@ -12,36 +12,13 @@
 // PRÉREQUIS : variable d'environnement Vercel FIREBASE_SERVICE_ACCOUNT.
 
 import admin from "firebase-admin";
-import { DEFAULT_TARIFS } from "../../_tarifs-defaults.js";
+import { DEFAULT_TARIFS, getVetuste, prixAvecVetuste } from "../../_tarifs-defaults.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)),
   });
 }
-
-// ⚠ Barème de vétusté et calculs identiques à src/App.jsx (getVetuste,
-// prixAvecVetuste, montantPoste) — à maintenir en phase si le barème change.
-const VETUSTE = [
-  { annee: 1, taux: 0 }, { annee: 2, taux: 0 }, { annee: 3, taux: -20 }, { annee: 4, taux: -25 },
-  { annee: 5, taux: -30 }, { annee: 6, taux: -35 }, { annee: 7, taux: -40 }, { annee: 8, taux: -45 },
-  { annee: 9, taux: -50 }, { annee: 10, taux: -55 },
-];
-
-function getVetuste(annee_fab) {
-  if (!annee_fab) return 0;
-  let annee = annee_fab;
-  if (String(annee_fab).includes("/")) {
-    const parts = String(annee_fab).split("/");
-    annee = parts[parts.length - 1];
-  }
-  const age = new Date().getFullYear() - parseInt(annee);
-  if (!Number.isFinite(age) || age <= 0) return 0;
-  const v = VETUSTE.find((v) => v.annee === Math.min(age, 10));
-  return v ? v.taux : (age >= 10 ? -55 : 0);
-}
-
-const prixAvecVetuste = (prix, taux) => (prix ? Math.round(prix * (1 + taux / 100)) : 0);
 
 const esc = (s) => String(s ?? "—").replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c]));
 const eur = (n) => Number(n || 0).toLocaleString("fr-FR");

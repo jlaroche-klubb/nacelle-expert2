@@ -95,3 +95,77 @@ export const DEFAULT_TARIFS = [
   { id: "nettoyage_interieur", zone: "nettoyage", label: "Nettoyage intérieur", prix: 100 },
   { id: "nettoyage_exterieur", zone: "nettoyage", label: "Nettoyage extérieur", prix: 70 },
 ];
+
+// ─── Barème de vétusté et calculs partagés (identiques à src/App.jsx) ───
+// Utilisés par les fonctions serveur ET pour produire le résumé d'expertise
+// stocké sur le dossier (expertise_resume), consommé par Delta VO.
+
+export const VETUSTE = [
+  { annee: 1, taux: 0 }, { annee: 2, taux: 0 }, { annee: 3, taux: -20 }, { annee: 4, taux: -25 },
+  { annee: 5, taux: -30 }, { annee: 6, taux: -35 }, { annee: 7, taux: -40 }, { annee: 8, taux: -45 },
+  { annee: 9, taux: -50 }, { annee: 10, taux: -55 },
+];
+
+export function getVetuste(annee_fab) {
+  if (!annee_fab) return 0;
+  let annee = annee_fab;
+  if (String(annee_fab).includes("/")) {
+    const parts = String(annee_fab).split("/");
+    annee = parts[parts.length - 1];
+  }
+  const age = new Date().getFullYear() - parseInt(annee);
+  if (!Number.isFinite(age) || age <= 0) return 0;
+  const v = VETUSTE.find((v) => v.annee === Math.min(age, 10));
+  return v ? v.taux : (age >= 10 ? -55 : 0);
+}
+
+export const prixAvecVetuste = (prix, taux) => (prix ? Math.round(prix * (1 + taux / 100)) : 0);
+
+/**
+ * Résumé d'expertise stocké sur le dossier (champ expertise_resume) :
+ * dégâts avec libellés et montants calculés, total retenue HT (provisoire si
+ * des postes sont en attente de devis), vétusté. Produit à la validation de
+ * l'expertise (App.jsx) et RECALCULÉ à chaque chiffrage atelier (api/devis).
+ * Delta VO le copie tel quel dans machines_vo.rapport_expertise.
+ */
+export function buildExpertiseResume(d, tarifs) {
+  const info = (d && d.info) || {};
+  const retour = (d && d.retour) || {};
+  const ids = Array.isArray(retour.degats) ? retour.degats : [];
+  const quantites = retour.quantites || {};
+  const md = retour.montants_devis || {};
+  const recu = (d && d.devis_recu) || {};
+  const taux = getVetuste(info.annee_fab);
+
+  let total = 0;
+  let nbAttente = 0;
+  const degats = ids.map((id) => {
+    const t = tarifs.find((x) => x.id === id) || null;
+    const label = (t && t.label) || (recu[id] && recu[id].label) || id;
+    const q = Number(quantites[id]) || 1;
+    const surDevis = t ? !!t.surDevis : (md[id] != null || !!recu[id]);
+    let montant;
+    let description = label + (q > 1 ? " × " + q : "");
+    if (surDevis) {
+      montant = Number(md[id]) || Number(recu[id] && recu[id].montant) || 0;
+      if (!montant) { nbAttente++; description += " — en attente de devis"; }
+      else if (recu[id] && recu[id].reference) description += " (réf. " + recu[id].reference + ")";
+    } else {
+      montant = prixAvecVetuste((t && t.prix) || 0, taux) * q;
+    }
+    total += montant;
+    return { zone: (t && t.zone) || "", description, montant };
+  });
+
+  return {
+    date_expertise: retour.date || "",
+    agent: retour.agent || "",
+    heures_nacelle: Number(retour.heures) || 0,
+    km_porteur: Number(retour.km_porteur) || 0,
+    taux_vetuste: taux,
+    degats,
+    total_retenue_ht: total,
+    notes: retour.note || "",
+    nb_attente: nbAttente,
+  };
+}
