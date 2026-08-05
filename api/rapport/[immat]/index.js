@@ -12,6 +12,7 @@
 // PRÉREQUIS : variable d'environnement Vercel FIREBASE_SERVICE_ACCOUNT.
 
 import admin from "firebase-admin";
+import { DEFAULT_TARIFS } from "../../_tarifs-defaults.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -91,7 +92,10 @@ export default async function handler(req, res) {
 
     // ───────── Page HTML à jour (montants relus de Firestore) ─────────
     const tarifsSnap = await db.collection("config").doc("tarifs").get();
-    const tarifs = (tarifsSnap.exists && Array.isArray(tarifsSnap.data().data)) ? tarifsSnap.data().data : [];
+    const tarifsCfg = (tarifsSnap.exists && Array.isArray(tarifsSnap.data().data)) ? tarifsSnap.data().data : [];
+    // ⚠ Tant qu'aucun admin n'a modifié les postes, config/tarifs n'existe pas
+    // dans Firestore : on retombe sur le barème par défaut de l'application.
+    const tarifs = tarifsCfg.length ? tarifsCfg : DEFAULT_TARIFS;
     const tarifOf = (id) => tarifs.find((t) => t.id === id) || null;
 
     const info = d.info || {};
@@ -107,12 +111,16 @@ export default async function handler(req, res) {
     let nbAttente = 0;
     const rows = degats.map((id) => {
       const t = tarifOf(id);
-      const label = (t && t.label) || id;
+      // Libellé : tarif connu → son label ; sinon label mémorisé au chiffrage ; sinon id brut
+      const label = (t && t.label) || (recu[id] && recu[id].label) || id;
       const q = Number(quantites[id]) || 1;
       const tranche = tranches[id] && tranches[id] !== "__LIBRE__" ? tranches[id] : "";
+      // Poste « sur devis » : tarif connu → son flag ; tarif inconnu (supprimé
+      // du barème depuis) → on se fie aux montants devis présents sur le dossier
+      const surDevis = t ? !!t.surDevis : (md[id] != null || !!recu[id]);
       let montantHtml;
-      if (t && t.surDevis) {
-        const m = Number(md[id]) || 0;
+      if (surDevis) {
+        const m = Number(md[id]) || Number(recu[id] && recu[id].montant) || 0;
         if (m > 0) {
           total += m;
           const ref = recu[id] && recu[id].reference ? ` <span style="color:#888;font-weight:400;">· réf. ${esc(recu[id].reference)}</span>` : "";

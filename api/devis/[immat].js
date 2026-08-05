@@ -12,6 +12,7 @@
 // PRÉREQUIS : variable d'environnement Vercel FIREBASE_SERVICE_ACCOUNT.
 
 import admin from "firebase-admin";
+import { DEFAULT_TARIFS } from "../_tarifs-defaults.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -45,8 +46,11 @@ export default async function handler(req, res) {
     const d = snap.data();
 
     // Tarifs (libellés des postes)
+    // ⚠ Tant qu'aucun admin n'a modifié les postes, config/tarifs n'existe pas
+    // dans Firestore : on retombe sur le barème par défaut de l'application.
     const tarifsSnap = await db.collection("config").doc("tarifs").get();
-    const tarifs = (tarifsSnap.exists && Array.isArray(tarifsSnap.data().data)) ? tarifsSnap.data().data : [];
+    const tarifsCfg = (tarifsSnap.exists && Array.isArray(tarifsSnap.data().data)) ? tarifsSnap.data().data : [];
+    const tarifs = tarifsCfg.length ? tarifsCfg : DEFAULT_TARIFS;
     const labelOf = (id) => (tarifs.find((t) => t.id === id) || {}).label || id;
 
     // ───────────────────────── POST : enregistrement ─────────────────────────
@@ -70,6 +74,9 @@ export default async function handler(req, res) {
             montant: Math.round(montant),
             reference: String(e.reference || "").slice(0, 80),
             date: new Date().toISOString(),
+            // Libellé mémorisé avec le chiffrage : affiché tel quel par le
+            // rapport client et par Delta VO (bandeau secrétaire)
+            label: labelOf(id),
           };
           updates[`retour.montants_devis.${id}`] = Math.round(montant);
           saisis++;
