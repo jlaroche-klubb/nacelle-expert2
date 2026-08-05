@@ -4,7 +4,7 @@ import { collection, doc, setDoc, getDocs, deleteDoc, getDoc, updateDoc, query, 
 import { getStorage, ref, uploadString, uploadBytes, getDownloadURL } from "firebase/storage";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import html2pdf from "html2pdf.js";
-import { DEFAULT_TARIFS } from "../api/_tarifs-defaults.js";
+import { DEFAULT_TARIFS, buildExpertiseResume } from "../api/_tarifs-defaults.js";
 
 const ADMIN_PASSWORD = "nacelle2024";
 const EMAIL_CC = "assistanat.commerce@delta-services.fr";
@@ -1831,6 +1831,10 @@ export default function App() {
         updated.devis_complet = true;
       }
     }
+    // 💶 Résumé d'expertise (dégâts + montants + total retenue) stocké sur le
+    // dossier : copié tel quel par Delta VO (secrétaires/commerciaux) et
+    // recalculé à chaque chiffrage atelier (api/devis).
+    updated.expertise_resume = buildExpertiseResume(updated, tarifs);
     delete updated._renamedFrom; // champ de travail : ne pas persister
     await fbSaveDossier(updated);
     if (isRenamed) {

@@ -12,7 +12,7 @@
 // PRÉREQUIS : variable d'environnement Vercel FIREBASE_SERVICE_ACCOUNT.
 
 import admin from "firebase-admin";
-import { DEFAULT_TARIFS } from "../_tarifs-defaults.js";
+import { DEFAULT_TARIFS, buildExpertiseResume } from "../_tarifs-defaults.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -91,6 +91,15 @@ export default async function handler(req, res) {
       updates.devis_complet = resteEnAttente.length === 0;
       updates.synced_to_delta_vo = false; // Delta VO récupère la mise à jour (badge secrétaire)
       updates.updatedAt = new Date().toISOString();
+
+      // 💶 Résumé d'expertise recalculé avec les nouveaux montants (total
+      // retenue à jour) — copié tel quel par Delta VO (secrétaires/commerciaux)
+      const mdMerged = { ...((d.retour && d.retour.montants_devis) || {}) };
+      for (const id of Object.keys(devisRecu)) mdMerged[id] = Number(devisRecu[id].montant) || mdMerged[id];
+      updates.expertise_resume = buildExpertiseResume(
+        { ...d, devis_recu: devisRecu, retour: { ...(d.retour || {}), montants_devis: mdMerged } },
+        tarifs
+      );
 
       await db.collection("dossiers").doc(immat).update(updates);
       res.status(200).json({ ok: true, complet: resteEnAttente.length === 0, restants: resteEnAttente.length });
