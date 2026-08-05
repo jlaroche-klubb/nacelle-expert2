@@ -1971,10 +1971,27 @@ export default function App() {
     try {
       await deleteDoc(doc(db,"dossiers",immat));
       setDossiers(prev=>{ const n={...prev}; delete n[immat]; return n; });
-      flash("Dossier supprimé ✓");
+      // 🔁 Suppression MIROIR de la fiche Delta VO (garde-fous côté serveur :
+      // seules les fiches en début de cycle — restitution/disponible, non
+      // archivées — sont supprimées ; une machine vendue/clôturée est conservée).
+      let msgVO = "";
+      try {
+        const token = await auth.currentUser?.getIdToken();
+        const r = await fetch("/api/delete-machine-vo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+          body: JSON.stringify({ immat }),
+        });
+        const j = await r.json().catch(()=>({}));
+        if (!r.ok) msgVO = " · ⚠ fiche Delta VO non supprimée ("+(j.error||("erreur "+r.status))+")";
+        else if (j.deleted) msgVO = " · fiche Delta VO supprimée";
+        else if (j.motif === "protegee") msgVO = " · fiche Delta VO conservée (statut : "+(j.statut||"avancé")+")";
+        else msgVO = " · pas de fiche Delta VO";
+      } catch(e2) { msgVO = " · ⚠ Delta VO injoignable ("+e2.message+")"; }
+      flash("Dossier supprimé ✓"+msgVO, 6000);
     } catch(e) { alert("Erreur : "+e.message); }
   }
-  function flash(msg) { setAdminMsg(msg); setTimeout(()=>setAdminMsg(""),2500); }
+  function flash(msg, duree) { setAdminMsg(msg); setTimeout(()=>setAdminMsg(""),duree||2500); }
 
   const vetusteTaux = foundDossier ? getVetuste(foundDossier.info?.annee_fab) : 0;
   const totalRetenue = retDegats.reduce((s,id)=>{ const t=tarifs.find(t=>t.id===id); return s+montantPoste(t,retQtes[id]||1,vetusteTaux,retMontantsDevis); },0);
@@ -3589,7 +3606,7 @@ export default function App() {
                             </span>
                           </div>
                         </div>
-                        <button className="btn btn-danger btn-sm" onClick={()=>{ if(window.confirm(`Supprimer définitivement le dossier "${d.immat||"SANS IMMAT"}" (${d.info?.client||"sans client"}) ?`)) deleteDossier(d.immat||d.id); }}>🗑 Supprimer</button>
+                        <button className="btn btn-danger btn-sm" onClick={()=>{ if(window.confirm(`Supprimer définitivement le dossier "${d.immat||"SANS IMMAT"}" (${d.info?.client||"sans client"}) ?\n\nLa fiche Delta VO liée sera aussi supprimée si elle est encore en début de cycle (restitution/disponible).\nUne machine vendue, clôturée ou en préparation ne sera PAS touchée.`)) deleteDossier(d.immat||d.id); }}>🗑 Supprimer</button>
                       </div>
                     ))}
                   </div>
