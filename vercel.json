@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron-vnc-compta",
+      "schedule": "0 5 1,16 * *"
+    }
+  ]
+}
