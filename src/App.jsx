@@ -1056,11 +1056,13 @@ export default function App() {
 
   // Auth states
   const [currentUser,setCurrentUser]=useState(null);
-  const [userProfile,setUserProfile]=useState(null);
+  const [userProfile,setUserProfile]=useState(null);
+  const [accessPending,setAccessPending]=useState(false); // demande d'accès envoyée, en attente de validation
   const [authLoading,setAuthLoading]=useState(true);
   const [users,setUsers]=useState([]);
   const [showUserManagement,setShowUserManagement]=useState(false);
-  const [userForm,setUserForm]=useState({email:"",nom:"",prenom:"",role:"expert"});
+  const [userForm,setUserForm]=useState({email:"",nom:"",prenom:"",role:"expert"});
+  const [pendingRole,setPendingRole]=useState({}); // rôle choisi pour chaque demande d'accès (uid → rôle)
   // 🏆 Super admin : identifié par le compte connecté (rôle « superadmin »).
   // Amorçage : jlaroche@klubb.com est toujours super admin (anti-verrouillage).
   const isSuperAdmin = userProfile?.role==="superadmin" || (currentUser?.email||"").toLowerCase()==="jlaroche@klubb.com";
@@ -1184,6 +1186,7 @@ export default function App() {
           if(userDoc.exists()){
             const profile = userDoc.data();
             console.log("✅ User profile loaded:", profile);
+            setAccessPending(false);
             setUserProfile(profile);
           } else {
             // Check if user is in pending_users (first login)
@@ -1191,10 +1194,10 @@ export default function App() {
             const pendingId = user.email.replace(/[@.]/g, '_');
             const pendingDoc = await getDoc(doc(db, "pending_users", pendingId));
             
-            if(pendingDoc.exists()){
-              // Migrate from pending_users to users
+            const pendingData = pendingDoc.exists() ? pendingDoc.data() : null;
+            if(pendingData && pendingData.role){
+              // Migrate from pending_users to users (compte validé : rôle attribué)
               console.log("✨ Migrating user from pending to active");
-              const pendingData = pendingDoc.data();
               const newProfile = {
                 email: pendingData.email,
                 nom: pendingData.nom,
@@ -1212,8 +1215,32 @@ export default function App() {
               
               console.log("✅ User activated successfully!");
               setUserProfile(newProfile);
+            } else if(pendingData){
+              // Demande déjà envoyée, en attente de validation par le super admin
+              console.log("⏳ Demande d'accès en attente de validation");
+              setAccessPending(true);
+              setUserProfile(null);
             } else {
-              console.log("❌ No user profile found in Firestore for UID:", user.uid);
+              // 🆕 Première connexion inconnue → création d'une DEMANDE
+              // D'ACCÈS (même fonctionnement que Delta VO) + notification
+              console.log("🆕 Nouvel utilisateur : création de la demande d'accès");
+              const dn = user.displayName || "";
+              const prenomAuto = dn.split(" ")[0] || "Prénom";
+              const nomAuto = dn.split(" ").slice(1).join(" ") || "Nom";
+              await setDoc(doc(db, "pending_users", pendingId), {
+                email: user.email,
+                nom: nomAuto,
+                prenom: prenomAuto,
+                createdAt: new Date().toISOString(),
+                status: "pending",
+                demande_acces: true // demande spontanée (pas de rôle tant que non validée)
+              });
+              // 📧 Notification au super admin (non bloquant)
+              try {
+                const tk = await user.getIdToken();
+                fetch("/api/notify-new-user", {method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${tk}`},body:"{}"}).catch(()=>{});
+              } catch(e) { console.warn("Notification nouvel utilisateur:", e); }
+              setAccessPending(true);
               setUserProfile(null);
             }
           }
@@ -1223,6 +1250,7 @@ export default function App() {
         }
       } else {
         console.log("🚪 No user logged in");
+        setAccessPending(false);
         setUserProfile(null);
       }
       setAuthLoading(false);
@@ -1396,6 +1424,20 @@ export default function App() {
       setEditingUser(null);
     } catch(error) {
       console.error("Error updating user:", error);
+      alert("Erreur : " + error.message);
+    }
+  }
+
+  // ✅ Validation d'une demande d'accès : on pose le rôle sur pending_users ;
+  // la migration vers users se fait à la prochaine connexion de la personne.
+  async function approveRequest(uid) {
+    try {
+      await updateDoc(doc(db, "pending_users", uid), { role: pendingRole[uid] || "expert" });
+      setAdminMsg("Accès validé ! La personne peut se connecter (ou recharger la page).");
+      setTimeout(() => setAdminMsg(""), 4000);
+      loadUsers();
+    } catch(error) {
+      console.error("Error approving request:", error);
       alert("Erreur : " + error.message);
     }
   }
@@ -2095,10 +2137,17 @@ export default function App() {
             ) : (
               <div style={{color:"var(--muted)",fontSize:13}}>
                 <div style={{marginBottom:16}}>✉️ {currentUser.email}</div>
-                <div style={{marginBottom:16,color:"var(--accent)"}}>
-                  ⚠️ Votre compte n'est pas encore autorisé.<br/>
-                  Contactez l'administrateur.
-                </div>
+                {accessPending ? (
+                  <div style={{marginBottom:16,color:"#208040"}}>
+                    ✅ Votre demande d'accès a été envoyée.<br/>
+                    Vous pourrez vous connecter dès qu'un administrateur l'aura validée.
+                  </div>
+                ) : (
+                  <div style={{marginBottom:16,color:"var(--accent)"}}>
+                    ⚠️ Votre compte n'est pas encore autorisé.<br/>
+                    Contactez l'administrateur.
+                  </div>
+                )}
                 <button className="btn btn-outline btn-sm" onClick={handleLogout}>
                   Se déconnecter
                 </button>
@@ -3650,14 +3699,24 @@ export default function App() {
                           <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
                             <span style={{fontWeight:700,fontSize:13}}>{u.prenom} {u.nom}</span>
                             <span style={{fontSize:12,color:"var(--muted)"}}>{u.email}</span>
-                            <span className={`badge ${(u.role==="admin"||u.role==="superadmin")?"badge-primary":"badge-ok"}`} style={{fontSize:10}}>
+                            {u.role&&<span className={`badge ${(u.role==="admin"||u.role==="superadmin")?"badge-primary":"badge-ok"}`} style={{fontSize:10}}>
                               {u.role==="superadmin"?"🏆 Super admin":u.role==="admin"?"Admin":"Expert"}
-                            </span>
-                            {u.status==="pending"&&<span className="badge badge-warn" style={{fontSize:10}}>En attente de connexion</span>}
+                            </span>}
+                            {u.status==="pending"&&(u.role
+                              ?<span className="badge badge-warn" style={{fontSize:10}}>En attente de connexion</span>
+                              :<span className="badge badge-warn" style={{fontSize:10}}>🔔 Demande d'accès à valider</span>)}
                             {u.status==="active"&&<span className="badge badge-ok" style={{fontSize:10}}>✓ Actif</span>}
                           </div>
                         </div>
-                        <div style={{display:"flex",gap:8}}>
+                        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                          {u.status==="pending"&&!u.role&&(<>
+                            <select value={pendingRole[u.uid]||"expert"} onChange={e=>setPendingRole({...pendingRole,[u.uid]:e.target.value})} style={{fontSize:12,padding:"4px 6px"}}>
+                              <option value="expert">Expert</option>
+                              <option value="admin">Administrateur</option>
+                              <option value="superadmin">🏆 Super administrateur</option>
+                            </select>
+                            <button className="btn btn-gold btn-sm" onClick={()=>approveRequest(u.uid)}>✓ Valider</button>
+                          </>)}
                           <button className="btn btn-icon" onClick={()=>{setEditingUser(u.uid);setUserForm({email:u.email,nom:u.nom,prenom:u.prenom,role:u.role});}} disabled={u.status==="pending"}>✏</button>
                           <button className="btn btn-icon" style={{color:"var(--danger)"}} onClick={()=>deleteUser(u.uid)}>🗑</button>
                         </div>
