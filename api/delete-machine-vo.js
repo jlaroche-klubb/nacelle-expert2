@@ -48,7 +48,7 @@ export default async function handler(req, res) {
 
     const userSnap = await admin.firestore().collection("users").doc(decoded.uid).get();
     const role = userSnap.exists ? userSnap.data().role : null;
-    if (role !== "admin") {
+    if (role !== "admin" && role !== "superadmin") {
       res.status(403).json({ error: "Réservé aux administrateurs Nacelle Expert" });
       return;
     }

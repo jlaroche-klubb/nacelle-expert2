@@ -1061,6 +1061,9 @@ export default function App() {
   const [users,setUsers]=useState([]);
   const [showUserManagement,setShowUserManagement]=useState(false);
   const [userForm,setUserForm]=useState({email:"",nom:"",prenom:"",role:"expert"});
+  // 🏆 Super admin : identifié par le compte connecté (rôle « superadmin »).
+  // Amorçage : jlaroche@klubb.com est toujours super admin (anti-verrouillage).
+  const isSuperAdmin = userProfile?.role==="superadmin" || (currentUser?.email||"").toLowerCase()==="jlaroche@klubb.com";
   const [editingUser,setEditingUser]=useState(null);
   const [retStep,setRetStep]=useState(0);
   const [searchImmat,setSearchImmat]=useState("");
@@ -2131,7 +2134,7 @@ export default function App() {
               👤 {userProfile.prenom} {userProfile.nom}
             </div>
           )}
-          <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={()=>{setAdminOpen(true);setAdminAuthed(false);setAdminPwd("");}}>⚙</button>
+          <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={()=>{setAdminOpen(true);setAdminAuthed(false);setAdminPwd("");setAdminTab(isSuperAdmin?"zones":"dossiers");}}>⚙</button>
           {view==="home"&&<>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("ventes");setActiveDossier(null);setVenteImmat("");setVenteSearchDone(false);setVentePhotosLibres({});}}>📷 Photos de ventes</button>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>Expertise Retour</button>
@@ -3467,10 +3470,10 @@ export default function App() {
                   <button className="btn btn-icon" onClick={()=>{setAdminOpen(false);setAdminAuthed(false);}}>✕</button>
                 </div>
                 <div style={{display:"flex",flexWrap:"wrap",borderBottom:"2px solid var(--primary)",marginBottom:18}}>
-                  {[[" zones","Zones"],["tarifs","Postes tarifaires"],["types","Types nacelle"],["dossiers","Dossiers"],["users","Utilisateurs"],["emails","📧 Emails"]].map(([id,label])=>(<div key={id} className={`tab ${adminTab===id?"active":""}`} onClick={()=>{setAdminTab(id);setZoneEdit(null);setTarifEdit(null);loadUsers();}}>{label}</div>))}
+                  {[[" zones","Zones"],["tarifs","Postes tarifaires"],["types","Types nacelle"],["dossiers","Dossiers"],["users","Utilisateurs"],["emails","📧 Emails"]].filter(([id])=>isSuperAdmin||id.trim()==="dossiers").map(([id,label])=>(<div key={id} className={`tab ${adminTab===id?"active":""}`} onClick={()=>{setAdminTab(id);setZoneEdit(null);setTarifEdit(null);loadUsers();}}>{label}</div>))}
                 </div>
                 {adminMsg&&<div style={{padding:"8px 12px",background:"rgba(48,160,80,.1)",color:"#208040",border:"1px solid rgba(48,160,80,.3)",fontSize:13,marginBottom:14}}>{adminMsg}</div>}
-                {adminTab==="zones"&&(
+                {isSuperAdmin&&adminTab==="zones"&&(
                   <div>
                     {zones.map((z,i)=>(<div key={z.id} className="admin-row"><div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:18}}>{z.icon}</span><span style={{fontWeight:600}}>{z.label}</span><span style={{fontSize:10,color:"var(--muted)"}}>{tarifs.filter(t=>t.zone===z.id).length} poste{tarifs.filter(t=>t.zone===z.id).length!==1?"s":""}</span></div><div style={{display:"flex",gap:4}}><button className="btn btn-icon" onClick={()=>{setZoneEdit(i);setZoneForm({label:z.label,icon:z.icon});}}>✏</button><button className="btn btn-icon" style={{color:"var(--danger)"}} onClick={()=>window.confirm(`Supprimer "${z.label}" ?`)&&deleteZone(i)}>🗑</button></div></div>))}
                     <div style={{marginTop:16,padding:14,border:"1px solid var(--border2)",background:"#f8f9fb"}}>
@@ -3482,7 +3485,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {adminTab==="types"&&(
+                {isSuperAdmin&&adminTab==="types"&&(
                   <div>
                     <div style={{fontSize:12,color:"var(--muted)",marginBottom:12,lineHeight:1.5}}>
                       Cette liste alimente le menu déroulant « Type nacelle » (départ, retour, corrections). L'option <b>AUTRE</b> (saisie libre) est toujours présente automatiquement.
@@ -3530,7 +3533,7 @@ export default function App() {
                     ))}
                   </div>
                 )}
-                {adminTab==="tarifs"&&(
+                {isSuperAdmin&&adminTab==="tarifs"&&(
                   <div>
                     {zones.map(zone=>{
                       const tz=tarifs.filter(t=>t.zone===zone.id);
@@ -3571,7 +3574,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {adminTab==="emails"&&(
+                {isSuperAdmin&&adminTab==="emails"&&(
                   <div>
                     <div style={{fontSize:12,color:"var(--muted)",marginBottom:14}}>
                       Destinataires des envois automatiques. Une adresse par ligne. Laisser vide = valeurs par défaut.
@@ -3600,7 +3603,7 @@ export default function App() {
                     <button className="btn btn-gold" onClick={saveEmailsCfg}>✓ Enregistrer</button>
                   </div>
                 )}
-                {adminTab==="users"&&(
+                {isSuperAdmin&&adminTab==="users"&&(
                   <div>
                     <div style={{marginBottom:14}}>
                       <div style={{fontSize:11,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:10,fontWeight:700}}>
@@ -3625,6 +3628,7 @@ export default function App() {
                         <select value={userForm.role} onChange={e=>setUserForm({...userForm,role:e.target.value})}>
                           <option value="expert">Expert</option>
                           <option value="admin">Administrateur</option>
+                          <option value="superadmin">🏆 Super administrateur</option>
                         </select>
                       </div>
                       <div style={{display:"flex",gap:8}}>
@@ -3646,8 +3650,8 @@ export default function App() {
                           <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
                             <span style={{fontWeight:700,fontSize:13}}>{u.prenom} {u.nom}</span>
                             <span style={{fontSize:12,color:"var(--muted)"}}>{u.email}</span>
-                            <span className={`badge ${u.role==="admin"?"badge-primary":"badge-ok"}`} style={{fontSize:10}}>
-                              {u.role==="admin"?"Admin":"Expert"}
+                            <span className={`badge ${(u.role==="admin"||u.role==="superadmin")?"badge-primary":"badge-ok"}`} style={{fontSize:10}}>
+                              {u.role==="superadmin"?"🏆 Super admin":u.role==="admin"?"Admin":"Expert"}
                             </span>
                             {u.status==="pending"&&<span className="badge badge-warn" style={{fontSize:10}}>En attente de connexion</span>}
                             {u.status==="active"&&<span className="badge badge-ok" style={{fontSize:10}}>✓ Actif</span>}
