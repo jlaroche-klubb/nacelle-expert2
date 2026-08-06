@@ -1192,9 +1192,15 @@ export default function App() {
             // Check if user is in pending_users (first login)
             console.log("🔍 Checking pending_users for email:", user.email);
             const pendingId = user.email.replace(/[@.]/g, '_');
-            const pendingDoc = await getDoc(doc(db, "pending_users", pendingId));
-            
-            const pendingData = pendingDoc.exists() ? pendingDoc.data() : null;
+            let pendingData = null;
+            let pendingLu = true; // false si les règles Firestore refusent la lecture
+            try {
+              const pendingDoc = await getDoc(doc(db, "pending_users", pendingId));
+              pendingData = pendingDoc.exists() ? pendingDoc.data() : null;
+            } catch(e) {
+              console.warn("Lecture pending_users refusée, passage par l'API:", e);
+              pendingLu = false;
+            }
             if(pendingData && pendingData.role){
               // Migrate from pending_users to users (compte validé : rôle attribué)
               console.log("✨ Migrating user from pending to active");
@@ -1221,26 +1227,23 @@ export default function App() {
               setAccessPending(true);
               setUserProfile(null);
             } else {
-              // 🆕 Première connexion inconnue → création d'une DEMANDE
-              // D'ACCÈS (même fonctionnement que Delta VO) + notification
-              console.log("🆕 Nouvel utilisateur : création de la demande d'accès");
-              const dn = user.displayName || "";
-              const prenomAuto = dn.split(" ")[0] || "Prénom";
-              const nomAuto = dn.split(" ").slice(1).join(" ") || "Nom";
-              await setDoc(doc(db, "pending_users", pendingId), {
-                email: user.email,
-                nom: nomAuto,
-                prenom: prenomAuto,
-                createdAt: new Date().toISOString(),
-                status: "pending",
-                demande_acces: true // demande spontanée (pas de rôle tant que non validée)
-              });
-              // 📧 Notification au super admin (non bloquant)
+              // 🆕 Première connexion inconnue → le SERVEUR crée la
+              // demande d'accès et notifie le super admin (les règles
+              // Firestore interdisent cette écriture aux comptes sans profil)
+              console.log("🆕 Nouvel utilisateur : demande d'accès via l'API");
               try {
                 const tk = await user.getIdToken();
-                fetch("/api/notify-new-user", {method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${tk}`},body:"{}"}).catch(()=>{});
-              } catch(e) { console.warn("Notification nouvel utilisateur:", e); }
-              setAccessPending(true);
+                const r = await fetch("/api/notify-new-user", {method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${tk}`},body:"{}"});
+                const rj = await r.json().catch(()=>({}));
+                console.log("📧 Demande d'accès:", r.status, rj);
+                if (r.ok && rj.status === "approved" && !pendingLu) {
+                  // Pré-création avec rôle que l'app n'a pas pu lire :
+                  // on invite à recharger (la migration se fera alors)
+                  setAccessPending(false);
+                } else if (r.ok) {
+                  setAccessPending(true); // demande créée / déjà en attente
+                }
+              } catch(e) { console.error("Demande d'accès impossible:", e); }
               setUserProfile(null);
             }
           }
