@@ -19,6 +19,10 @@ function toExcelDate(v) {
   if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
   m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
+  const n = Number(s);
+  if (Number.isFinite(n) && n > 20000 && n < 80000) {
+    return new Date(Math.round((n - 25569) * 86400000)); // n° de série Excel en texte (legs import initial)
+  }
   return s;
 }
 
