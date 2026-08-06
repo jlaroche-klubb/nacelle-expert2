@@ -19,7 +19,7 @@
 //   automatiquement en Authorization sur les déclenchements de cron).
 
 import admin from "firebase-admin";
-import * as XLSX from "xlsx";
+import { buildVogWorkbook } from "./_vnc-workbook.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -39,6 +39,7 @@ function getDeltaVoApp() {
 }
 
 const DEFAULT_COMPTA_TO = ["jlaroche@klubb.com"]; // ⚠ à remplacer dans Admin → Emails
+const APP_URL = "https://nacelle-expert2.vercel.app";
 
 export default async function handler(req, res) {
   try {
@@ -63,55 +64,41 @@ export default async function handler(req, res) {
       return;
     }
 
-    // Destinataires : Admin NE → 📧 Emails (compta_to), défaut sinon
+    // Destinataires + jeton de téléchargement : Admin NE → 📧 Emails (config/emails)
+    const cfgRef = admin.firestore().collection("config").doc("emails");
     let recipients = DEFAULT_COMPTA_TO;
+    let vncToken = "";
     try {
-      const cfgSnap = await admin.firestore().collection("config").doc("emails").get();
+      const cfgSnap = await cfgRef.get();
       const cfg = cfgSnap.exists ? cfgSnap.data() : {};
       if (Array.isArray(cfg.compta_to) && cfg.compta_to.length) recipients = cfg.compta_to;
+      vncToken = cfg.vnc_token || "";
     } catch { /* défaut conservé */ }
 
-    // 🚜 Parc Delta VO actif (non archivé) — mêmes colonnes que l'export manuel
-    const snap = await dvApp.firestore().collection("machines_vo").get();
-    const rows = [];
-    snap.forEach((d) => {
-      const m = d.data();
-      if (m.archived) return;
-      rows.push({
-        "N° occasion": m.numero_occasion || "",
-        "Immatriculation": m.immat || d.id,
-        "N° de châssis": m.num_chassis || "",
-        "Type nacelle": m.type_nacelle || "",
-        "Modèle porteur": m.modele || "",
-        "Date de mise en service": m.date_mise_en_service || "",
-        "Mise en circulation": m.annee_fab || "",
-        "Propriétaire": m.proprietaire || "",
-        "Catégorie": m.categorie_vehicule || "",
-        "Prix de vente HT (€)": m.prix_fr ?? "",
-        "VNC (€)": m.vr_vnc ?? "",
-      });
-    });
-    rows.sort((a, b) => String(a["N° occasion"]).localeCompare(String(b["N° occasion"]), "fr", { numeric: true }));
+    // 🔑 Jeton du lien de téléchargement (généré une fois, réutilisé ensuite)
+    if (!vncToken) {
+      vncToken = Array.from({ length: 48 }, () => "abcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(Math.random() * 36)]).join("");
+      await cfgRef.set({ vnc_token: vncToken }, { merge: true });
+    }
 
-    const ws = XLSX.utils.json_to_sheet(rows);
-    ws["!cols"] = [
-      { wch: 12 }, { wch: 13 }, { wch: 20 }, { wch: 14 }, { wch: 20 },
-      { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 16 }, { wch: 14 },
-    ];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "VNC");
-    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    // 🚜 Décompte du parc actif (le fichier lui-même est généré AU CLIC sur le
+    // lien — /api/vnc-fichier — donc toujours à jour, même colonnes que
+    // l'« Export parc (VOG) » de Delta VO)
+    const snap = await dvApp.firestore().collection("machines_vo").get();
+    const { count } = buildVogWorkbook(snap.docs);
 
     const dateStr = new Date().toISOString().slice(0, 10);
+    const lien = `${APP_URL}/api/vnc-fichier?cle=${encodeURIComponent(vncToken)}`;
     const html =
       `<div style="font-family:Arial,sans-serif;max-width:560px;">` +
       `<h2 style="color:#1a2a6e;margin-bottom:4px;">💶 Mise à jour des VNC · Parc VO</h2>` +
       `<p style="color:#666;margin-top:0;">Delta VO · Delta Services</p>` +
       `<p>Bonjour,</p>` +
-      `<p>Veuillez trouver en pièce jointe la liste du parc VO actif (<b>${rows.length} machine${rows.length > 1 ? "s" : ""}</b>).</p>` +
-      `<p><b>Merci de mettre à jour la colonne « VNC (€) »</b> puis de renvoyer le fichier au service ADV, ` +
-      `qui l'intégrera dans Delta VO (bouton « Import VNC »).</p>` +
-      `<p style="color:#999;font-size:12px;margin-top:18px;">Envoi automatique le 1er et le 16 de chaque mois · ne pas répondre à cet email · destinataires modifiables dans Nacelle Expert, Admin → 📧 Emails.</p>` +
+      `<p>Le fichier du parc VO actif (<b>${count} machine${count > 1 ? "s" : ""}</b>, format VOG) est prêt :</p>` +
+      `<p style="margin:18px 0;"><a href="${lien}" style="background:#1a2a6e;color:#fff;padding:12px 26px;text-decoration:none;font-weight:bold;border-radius:4px;">&#128229; Télécharger le fichier Excel</a></p>` +
+      `<p><b>Merci de mettre à jour la colonne « VR OU VNC EUR »</b> puis de renvoyer le fichier au service ADV, ` +
+      `qui le réintégrera dans Delta VO.</p>` +
+      `<p style="color:#999;font-size:12px;margin-top:18px;">Le fichier est généré au moment du clic (données à jour). Lien réservé au service comptable. Envoi automatique le 1er et le 16 de chaque mois · ne pas répondre à cet email · destinataires modifiables dans Nacelle Expert, Admin → 📧 Emails.</p>` +
       `</div>`;
 
     const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -120,9 +107,8 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         sender: { email: senderEmail, name: process.env.BREVO_SENDER_NAME || "Delta VO · Delta Services" },
         to: recipients.map((email) => ({ email })),
-        subject: `💶 VNC à mettre à jour · Parc VO (${rows.length} machines) · ${dateStr}`,
+        subject: `💶 VNC à mettre à jour · Parc VO (${count} machines) · ${dateStr}`,
         htmlContent: html,
-        attachment: [{ name: `delta-vo_vnc-compta_${dateStr}.xlsx`, content: buffer.toString("base64") }],
       }),
     });
     if (!resp.ok) {
@@ -132,8 +118,8 @@ export default async function handler(req, res) {
       return;
     }
 
-    console.log(`📆 Fichier VNC envoyé à la compta (${recipients.length} destinataire(s), ${rows.length} machines)`);
-    res.status(200).json({ ok: true, machines: rows.length, recipients: recipients.length });
+    console.log(`📆 Lien du fichier parc VOG envoyé à la compta (${recipients.length} destinataire(s), ${count} machines)`);
+    res.status(200).json({ ok: true, machines: count, recipients: recipients.length });
   } catch (e) {
     console.error("cron-vnc-compta:", e);
     res.status(500).json({ error: e.message });
