@@ -1347,15 +1347,18 @@ export default function App() {
   // sinon directement sur le serveur (puis mémorisé). Garantit que les recherches
   // (retour, départ, photos de ventes) trouvent TOUJOURS un dossier, même ancien
   // et hors des pages chargées.
-  async function fetchDossier(immatRaw) {
+  // force=true : relit TOUJOURS le serveur (ignore la copie en mémoire) et
+  // rafraîchit le cache — indispensable pour le pré-départ Delta VO, qui
+  // vient d'écrire le NOUVEL acheteur pendant que la page était ouverte.
+  async function fetchDossier(immatRaw, force) {
     const im = normalizeImmat((immatRaw || "").trim());
     if (!im) return null;
-    if (dossiers[im]) return dossiers[im];
+    if (!force && dossiers[im]) return dossiers[im];
     try {
       const snap = await getDoc(doc(db, "dossiers", im));
       if (snap.exists()) {
         const d = snap.data();
-        setDossiers(prev => prev[im] ? prev : { ...prev, [im]: d });
+        setDossiers(prev => (force || !prev[im]) ? { ...prev, [im]: d } : prev);
         return d;
       }
     } catch (e) { console.error("Chargement du dossier", im, e); }
@@ -2375,10 +2378,9 @@ export default function App() {
                       setDepForm(f=>({...f, immat}));
                       if (dossiers[immat]) applyPrefill(dossiers[immat], false);
                       // Immat complète → on relit TOUJOURS le dossier à jour sur le serveur
-                      if (/^[A-Z]{2}-[0-9]{3}-[A-Z]{2}$/.test(immat)) fetchDossier(immat).then(d => {
+                      if (/^[A-Z]{2}-[0-9]{3}-[A-Z]{2}$/.test(immat)) fetchDossier(immat, true).then(d => {
                         if (!d) return;
                         applyPrefill(d, true);
-                        setDossiers(prev => ({ ...prev, [immat]: d })); // rafraîchit la copie locale
                       });
                     }} placeholder="AB-123-CD"/></div>
                     <div><label>Type nacelle</label><TypeNacelleSelect value={depForm.type_nacelle} onChange={v=>setDepForm({...depForm,type_nacelle:v})} types={typesNacelle}/></div>
