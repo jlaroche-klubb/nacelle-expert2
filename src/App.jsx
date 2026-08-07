@@ -2355,14 +2355,17 @@ export default function App() {
                       // Pré-remplit les champs VIDES depuis le dossier existant (infos ADV
                       // Delta VO ou cycle précédent). Le dossier est cherché sur le serveur
                       // s'il n'est pas dans les pages chargées (pagination).
-                      const applyPrefill = (d) => {
+                      // fresh=true : données relues sur le serveur → PRIORITAIRES
+                      // (le pré-départ Delta VO vient d'y écrire le NOUVEL acheteur ;
+                      // la copie en mémoire peut dater d'avant et montrer l'ancien client)
+                      const applyPrefill = (d, fresh) => {
                         if (!d?.info) return;
                         const i = d.info;
                         setDepForm(f => f.immat === immat ? ({
                           ...f,
-                          client: f.client || i.client || "",
-                          contrat: f.contrat || i.contrat || "",
-                          email: f.email || i.email || "",
+                          client: fresh ? (i.client || f.client || "") : (f.client || i.client || ""),
+                          contrat: fresh ? (i.contrat || f.contrat || "") : (f.contrat || i.contrat || ""),
+                          email: fresh ? (i.email || f.email || "") : (f.email || i.email || ""),
                           type_nacelle: f.type_nacelle || i.type_nacelle || "",
                           modele: f.modele || i.modele || "",
                           annee_fab: f.annee_fab || i.annee_fab || "",
@@ -2370,8 +2373,13 @@ export default function App() {
                         }) : f);
                       };
                       setDepForm(f=>({...f, immat}));
-                      if (dossiers[immat]) applyPrefill(dossiers[immat]);
-                      else if (/^[A-Z]{2}-[0-9]{3}-[A-Z]{2}$/.test(immat)) fetchDossier(immat).then(applyPrefill);
+                      if (dossiers[immat]) applyPrefill(dossiers[immat], false);
+                      // Immat complète → on relit TOUJOURS le dossier à jour sur le serveur
+                      if (/^[A-Z]{2}-[0-9]{3}-[A-Z]{2}$/.test(immat)) fetchDossier(immat).then(d => {
+                        if (!d) return;
+                        applyPrefill(d, true);
+                        setDossiers(prev => ({ ...prev, [immat]: d })); // rafraîchit la copie locale
+                      });
                     }} placeholder="AB-123-CD"/></div>
                     <div><label>Type nacelle</label><TypeNacelleSelect value={depForm.type_nacelle} onChange={v=>setDepForm({...depForm,type_nacelle:v})} types={typesNacelle}/></div>
                     <div><label>Modèle porteur</label><input value={depForm.modele} onChange={e=>setDepForm({...depForm,modele:e.target.value})} placeholder="HA 16 PX"/></div>
