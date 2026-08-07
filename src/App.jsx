@@ -1781,6 +1781,9 @@ export default function App() {
       // Le bac "a_trier" n'est jamais sauvegardé : les photos non affectées sont abandonnées (confirmées avant validation)
       depart:{zones:depZones,photos:(()=>{ const {a_trier,...rest}=depPhotos; return rest; })(),tests:depTests,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent,...(signatureInfo?{signature_client:signatureInfo}:{})},
       retour:null,
+      // 🚚 Sécurité départ : Delta VO détecte ce dossier (départ seul)
+      // et fait suivre la machine (prête / louée LLD) — jamais de restitution.
+      synced_to_delta_vo: false,
       createdAt:new Date().toISOString(),
       createdBy: currentUser?.uid || null,
       createdByName: userProfile ? `${userProfile.prenom} ${userProfile.nom}` : depForm.agent
