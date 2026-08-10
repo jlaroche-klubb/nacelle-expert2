@@ -1974,7 +1974,7 @@ export default function App() {
   const dossiersActifs = Object.values(dossiers).filter(d=>!d.archived);
   const filteredDossiers = dossiersActifs.filter(d=>{
     const matchQ = !searchQ||[d.immat,d.info?.client,d.info?.contrat].some(v=>v?.toLowerCase?.().includes(searchQ.toLowerCase()));
-    const matchStatut = filterStatut==="tous" || (filterStatut==="retour"&&d.retour&&!d.devis_pending?.length) || (filterStatut==="location"&&!d.retour&&!d.depart?.sansDossier) || (filterStatut==="sans_depart"&&d.depart?.sansDossier&&!d.retour) || (filterStatut==="attente_devis"&&d.devis_pending?.length);
+    const matchStatut = filterStatut==="tous" || (filterStatut==="retour"&&d.retour&&!d.devis_pending?.length) || (filterStatut==="location"&&d.depart&&!d.depart.sansDossier&&!d.retour) || (filterStatut==="preremplis"&&!d.depart&&!d.retour) || (filterStatut==="sans_depart"&&d.depart?.sansDossier&&!d.retour) || (filterStatut==="attente_devis"&&d.devis_pending?.length);
     return matchQ && matchStatut;
   });
 
@@ -2232,7 +2232,7 @@ export default function App() {
               </div>
             )}
             <div style={{display:"flex",gap:10,marginBottom:18}}>
-              {[["Dossiers",dossiersActifs.length,"var(--primary)"],["Retours traités",dossiersActifs.filter(d=>d.retour).length,"var(--ok)"],["En location",dossiersActifs.filter(d=>!d.retour).length,"var(--accent)"]].map(([l,n,c])=>(
+              {[["Dossiers",dossiersActifs.length,"var(--primary)"],["Retours traités",dossiersActifs.filter(d=>d.retour).length,"var(--ok)"],["En location",dossiersActifs.filter(d=>d.depart&&!d.depart.sansDossier&&!d.retour).length,"var(--accent)"]].map(([l,n,c])=>(
                 <div key={l} className="card" style={{flex:1,textAlign:"center"}}>
                   <div style={{fontFamily:"'Share Tech Mono'",fontSize:32,color:c,fontWeight:700}}>{n}</div>
                   <div style={{fontSize:10,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginTop:4}}>{l}</div>
@@ -2297,7 +2297,7 @@ export default function App() {
             </div>
             <input placeholder="Rechercher immatriculation, client, contrat..." value={searchQ} onChange={e=>setSearchQ(e.target.value)} style={{marginBottom:10}}/>
             <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
-              {[["tous","Tous",dossiersActifs.length],["location","En location",dossiersActifs.filter(d=>!d.retour&&!d.depart?.sansDossier).length],["retour","Retour traité",dossiersActifs.filter(d=>d.retour&&!d.devis_pending?.length).length],["sans_depart","Sans départ",dossiersActifs.filter(d=>d.depart?.sansDossier&&!d.retour).length],["attente_devis","⏳ En attente de devis",dossiersActifs.filter(d=>d.devis_pending?.length).length]].map(([val,label,count])=>(
+              {[["tous","Tous",dossiersActifs.length],["location","En location",dossiersActifs.filter(d=>d.depart&&!d.depart.sansDossier&&!d.retour).length],["retour","Retour traité",dossiersActifs.filter(d=>d.retour&&!d.devis_pending?.length).length],["preremplis","📋 Pré-remplis",dossiersActifs.filter(d=>!d.depart&&!d.retour).length],["sans_depart","Sans départ",dossiersActifs.filter(d=>d.depart?.sansDossier&&!d.retour).length],["attente_devis","⏳ En attente de devis",dossiersActifs.filter(d=>d.devis_pending?.length).length]].map(([val,label,count])=>(
                 <button key={val} onClick={()=>setFilterStatut(val)} style={{padding:"5px 12px",border:`1px solid ${filterStatut===val?"var(--primary)":"var(--border2)"}`,background:filterStatut===val?"var(--primary)":"#fff",color:filterStatut===val?"#fff":"var(--text)",fontSize:12,fontWeight:filterStatut===val?700:500,cursor:"pointer",fontFamily:"inherit",borderRadius:2,transition:"all .15s"}}>
                   {label} <span style={{opacity:.7}}>({count})</span>
                 </button>
@@ -2316,7 +2316,7 @@ export default function App() {
                   <div style={{display:"flex",gap:8,alignItems:"center"}}>
                     {(d.retour?.agent||d.depart?.agent||d.createdByName)&&<span style={{fontSize:11,color:"var(--muted)"}}>👤 {d.retour?.agent||d.depart?.agent||d.createdByName}</span>}
                     <span style={{fontSize:11,color:"var(--muted)"}}>{d.depart?.date}</span>
-                    <span className={`badge ${d.devis_pending?.length?"badge-warn":d.retour?"badge-ok":d.depart?.sansDossier?"badge-danger":"badge-warn"}`}>{d.devis_pending?.length?"⏳ Attente devis":d.retour?"Retour traité":d.depart?.sansDossier?"Sans départ":"En location"}</span>
+                    <span className={`badge ${d.devis_pending?.length?"badge-warn":d.retour?"badge-ok":!d.depart?"badge-primary":d.depart.sansDossier?"badge-danger":"badge-warn"}`}>{d.devis_pending?.length?"⏳ Attente devis":d.retour?"Retour traité":!d.depart?"📋 Pré-rempli":d.depart.sansDossier?"Sans départ":"En location"}</span>
                   </div>
                 </div>
               </div>
@@ -3591,7 +3591,7 @@ export default function App() {
                             <span style={{fontSize:12}}>{d.info?.client||"—"}</span>
                             <span style={{fontSize:11,color:"var(--muted)"}}>{d.depart?.date}</span>
                             <span className={`badge ${d.retour?"badge-ok":d.depart?.sansDossier?"badge-danger":"badge-warn"}`} style={{fontSize:10}}>
-                              {d.retour?"Retour traité":d.depart?.sansDossier?"Sans départ":"En location"}
+                              {d.retour?"Retour traité":!d.depart?"📋 Pré-rempli":d.depart.sansDossier?"Sans départ":"En location"}
                             </span>
                           </div>
                         </div>
