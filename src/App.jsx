@@ -400,12 +400,13 @@ label{font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--m
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 .header-bar{background:var(--primary);color:#fff;padding:0 24px;height:64px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.15);}
 @media(max-width:768px){
-  .header-bar{padding:0 12px;height:56px;}
-  .header-bar img{height:28px!important;}
-  .header-bar .header-title{font-size:11px!important;letter-spacing:1.5px!important;}
-  .header-bar .header-subtitle{font-size:7px!important;letter-spacing:1px!important;}
+  .header-bar{padding:8px 12px;height:auto;min-height:56px;flex-wrap:wrap;row-gap:6px;}
+  .header-bar img{height:26px!important;}
+  .header-bar .header-title{font-size:11px!important;letter-spacing:1.5px!important;white-space:nowrap;}
+  .header-bar .header-subtitle{display:none!important;}
   .header-bar .btn{font-size:10px;padding:6px 8px;}
-  .header-bar > div:first-child{gap:10px!important;}
+  .header-bar > div:first-child{gap:10px!important;flex-shrink:0;}
+  .header-bar > div:last-child{flex-wrap:wrap;justify-content:flex-end;row-gap:6px;margin-left:auto;}
 }
 @keyframes aiPulse{0%,80%,100%{opacity:.2}40%{opacity:1}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
@@ -2299,7 +2300,7 @@ export default function App() {
                 </button>
               ))}
             </div>
-            {loading&&<div style={{textAlign:"center",color:"var(--muted)",padding:40}}>Connexion Firebase...</div>}
+            {loading&&filteredDossiers.length===0&&<div style={{textAlign:"center",color:"var(--muted)",padding:40}}>Chargement des dossiers…</div>}
             {!loading&&filteredDossiers.length===0&&<div style={{textAlign:"center",color:"var(--muted)",padding:32,border:"1px dashed var(--border)",fontSize:13}}>Aucun dossier</div>}
             {filteredDossiers.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(d=>(
               <div key={d.immat} className="dossier-card" style={{marginBottom:6}} onClick={()=>{setActiveDossier(d);setView("rapport");}}>
