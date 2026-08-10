@@ -2314,6 +2314,7 @@ export default function App() {
                     <span style={{fontSize:12,color:"var(--muted)"}}>{d.info?.client}</span>
                   </div>
                   <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    {(d.retour?.agent||d.depart?.agent||d.createdByName)&&<span style={{fontSize:11,color:"var(--muted)"}}>👤 {d.retour?.agent||d.depart?.agent||d.createdByName}</span>}
                     <span style={{fontSize:11,color:"var(--muted)"}}>{d.depart?.date}</span>
                     <span className={`badge ${d.devis_pending?.length?"badge-warn":d.retour?"badge-ok":d.depart?.sansDossier?"badge-danger":"badge-warn"}`}>{d.devis_pending?.length?"⏳ Attente devis":d.retour?"Retour traité":d.depart?.sansDossier?"Sans départ":"En location"}</span>
                   </div>
