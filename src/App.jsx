@@ -1525,6 +1525,32 @@ export default function App() {
         throw new Error(`Format non pris en charge (${file.name}). Utilisez JPEG ou PNG.`);
       }
     }
+    // 🤖 CONTRÔLE IA D'ORIENTATION (best-effort, JAMAIS bloquant) :
+    // une miniature part à /api/photo-orientation (projet delta-vo) ; l'IA
+    // regarde l'image et indique la rotation nécessaire — imparable même
+    // quand l'étiquette EXIF du téléphone ment (Samsung...). En cas d'échec
+    // ou de délai (8 s), la photo part telle quelle.
+    try {
+      const thumb = await compressBase64(compressed, 384, 0.6);
+      if (thumb) {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 8000);
+        const resp = await fetch("https://delta-vo.vercel.app/api/photo-orientation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64: thumb }),
+          signal: ctrl.signal,
+        });
+        clearTimeout(tid);
+        const dataOri = await resp.json().catch(() => null);
+        const rot = Number(dataOri?.rotation) || 0;
+        if (resp.ok && (rot === 90 || rot === 180 || rot === 270)) {
+          const fixed = await rotateImageDeg(compressed, rot);
+          if (fixed) { compressed = fixed; console.log(`🤖 Photo redressée de ${rot}° (${file.name})`); }
+        }
+      }
+    } catch (e) { console.warn("Contrôle orientation IA ignoré:", e?.message || e); }
+
     const timestamp = Date.now();
     const rand = Math.random().toString(36).slice(2, 8);
     const storagePath = `dossiers/${immat}/${type}/${zoneId}/${timestamp}_${rand}.jpg`;
@@ -1592,6 +1618,20 @@ export default function App() {
     ctx.drawImage(img,-img.naturalWidth/2,-img.naturalHeight/2);
     return c.toDataURL("image/jpeg",0.85);
   }
+  async function rotateImageDeg(src, deg) {
+    try {
+      const img = await new Promise((res, rej) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => res(i); i.onerror = () => rej(new Error("img")); i.src = src; });
+      const c = document.createElement("canvas");
+      const swap = deg === 90 || deg === 270;
+      c.width = swap ? img.naturalHeight : img.naturalWidth;
+      c.height = swap ? img.naturalWidth : img.naturalHeight;
+      const ctx = c.getContext("2d");
+      ctx.translate(c.width / 2, c.height / 2); ctx.rotate((deg * Math.PI) / 180);
+      ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+      return c.toDataURL("image/jpeg", 0.85);
+    } catch { return null; }
+  }
+
   async function rotatePhotoAt(photosObj, zoneId, idx, setter) {
     const p = photosObj?.[zoneId]?.[idx];
     if(!p?.url || rotatingKey) return;
