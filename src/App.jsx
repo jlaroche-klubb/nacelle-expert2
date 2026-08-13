@@ -1625,11 +1625,18 @@ export default function App() {
   }
   async function rotateDossierPhoto(oldUrl) {
     if (!activeDossier || !oldUrl || rotatingKey) return;
+    // 🛡️ Cycle archivé = lecture seule. Sans ce garde-fou, l'enregistrement
+    // (setDoc sur dossiers/{immat}) aurait ÉCRASÉ le dossier actif avec le
+    // contenu de l'ancien cycle — perte du dossier en cours.
+    if (activeDossier.archived) {
+      alert("Cycle archivé : consultation seule, rotation impossible.");
+      return;
+    }
     setRotatingKey(oldUrl);
     try {
       const rotated = await rotateImage90(oldUrl);
       const immat = (activeDossier.immat || "no-immat").replace(/[^A-Z0-9-]/gi, "_");
-      const storagePath = `dossiers/${immat}/rotations/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const storagePath = `dossiers/${immat}/rotations/rapport/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
       const storageRef = ref(storage, storagePath);
       await withTimeout(uploadString(storageRef, rotated, "data_url"), 90000, "envoi photo pivotée");
       const url = await withTimeout(getDownloadURL(storageRef), 30000, "récupération URL");
