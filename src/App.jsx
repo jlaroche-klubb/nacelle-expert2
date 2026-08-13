@@ -1652,6 +1652,45 @@ export default function App() {
     } finally { setRotatingKey(null); }
   }
 
+  // ↻ Rotation d'une photo d'un DOSSIER DÉJÀ VALIDÉ (vue rapport).
+  // La photo pivotée est enregistrée sous une nouvelle URL, remplacée PARTOUT
+  // dans le dossier (départ, retour, tour complet, dégâts...) puis le dossier
+  // est sauvegardé tel quel — SANS toucher synced_to_delta_vo (pas de resync).
+  function replaceUrlDeep(obj, oldUrl, newUrl) {
+    if (obj == null) return obj;
+    if (typeof obj === "string") return obj === oldUrl ? newUrl : obj;
+    if (Array.isArray(obj)) return obj.map(x => replaceUrlDeep(x, oldUrl, newUrl));
+    if (typeof obj === "object") { const o = {}; for (const k of Object.keys(obj)) o[k] = replaceUrlDeep(obj[k], oldUrl, newUrl); return o; }
+    return obj;
+  }
+  async function rotateDossierPhoto(oldUrl) {
+    if (!activeDossier || !oldUrl || rotatingKey) return;
+    // 🛡️ Cycle archivé = lecture seule. Sans ce garde-fou, l'enregistrement
+    // (setDoc sur dossiers/{immat}) aurait ÉCRASÉ le dossier actif avec le
+    // contenu de l'ancien cycle — perte du dossier en cours.
+    if (activeDossier.archived) {
+      alert("Cycle archivé : consultation seule, rotation impossible.");
+      return;
+    }
+    setRotatingKey(oldUrl);
+    try {
+      const rotated = await rotateImage90(oldUrl);
+      const immat = (activeDossier.immat || "no-immat").replace(/[^A-Z0-9-]/gi, "_");
+      const storagePath = `dossiers/${immat}/rotations/rapport/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const storageRef = ref(storage, storagePath);
+      await withTimeout(uploadString(storageRef, rotated, "data_url"), 90000, "envoi photo pivotée");
+      const url = await withTimeout(getDownloadURL(storageRef), 30000, "récupération URL");
+      const updated = replaceUrlDeep({ ...activeDossier }, oldUrl, url);
+      delete updated._renamedFrom;
+      await setDoc(doc(db, "dossiers", updated.immat), updated);
+      setDossiers(prev => ({ ...prev, [updated.immat]: updated }));
+      setActiveDossier(updated);
+    } catch (e) {
+      console.error("Rotation dossier:", e);
+      alert("Rotation impossible : " + e.message);
+    } finally { setRotatingKey(null); }
+  }
+
   // ─── Tri des photos importées en lot (expertise retour) ───
   // Déplace une photo du bac "a_trier" vers une section, un angle du tour ou un dégât.
   // Si c'est un dégât, il est coché automatiquement (quantité 1 par défaut).
@@ -3389,8 +3428,8 @@ export default function App() {
                         <div key={angle.key} style={{marginBottom:10}}>
                           <div style={{fontSize:10,color:"var(--primary)",fontWeight:700,marginBottom:6}}>{angle.label}</div>
                           <div style={{display:"flex",gap:8}}>
-                            <div style={{flex:1}}><div style={{fontSize:9,color:"var(--muted)",textTransform:"uppercase",letterSpacing:2,marginBottom:4}}>Départ</div>{d?<img src={d.url} alt="" style={{width:"100%",maxWidth:160,height:100,objectFit:"cover",border:"1px solid var(--border2)"}}/>:<span style={{fontSize:12,color:"var(--muted)"}}>—</span>}</div>
-                            <div style={{flex:1}}><div style={{fontSize:9,color:"var(--primary)",textTransform:"uppercase",letterSpacing:2,marginBottom:4}}>Retour</div>{r?<img src={r.url} alt="" style={{width:"100%",maxWidth:160,height:100,objectFit:"cover",border:"1px solid var(--border2)"}}/>:<span style={{fontSize:12,color:"var(--muted)"}}>—</span>}</div>
+                            <div style={{flex:1}}><div style={{fontSize:9,color:"var(--muted)",textTransform:"uppercase",letterSpacing:2,marginBottom:4}}>Départ</div>{d?<div style={{position:"relative",display:"inline-block"}}><img src={d.url} alt="" style={{width:"100%",maxWidth:160,height:100,objectFit:"cover",border:"1px solid var(--border2)"}}/><button className="btn" title="Pivoter 90°" disabled={!!rotatingKey} onClick={()=>rotateDossierPhoto(d.url)} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===d.url?"…":"↻"}</button></div>:<span style={{fontSize:12,color:"var(--muted)"}}>—</span>}</div>
+                            <div style={{flex:1}}><div style={{fontSize:9,color:"var(--primary)",textTransform:"uppercase",letterSpacing:2,marginBottom:4}}>Retour</div>{r?<div style={{position:"relative",display:"inline-block"}}><img src={r.url} alt="" style={{width:"100%",maxWidth:160,height:100,objectFit:"cover",border:"1px solid var(--border2)"}}/><button className="btn" title="Pivoter 90°" disabled={!!rotatingKey} onClick={()=>rotateDossierPhoto(r.url)} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===r.url?"…":"↻"}</button></div>:<span style={{fontSize:12,color:"var(--muted)"}}>—</span>}</div>
                           </div>
                         </div>
                       ))}
@@ -3402,7 +3441,7 @@ export default function App() {
                           <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:6}}>{label}</div>
                           {z?.etat?<span className="etat-tag" style={{background:ETAT_COLORS[z.etat]+"22",color:ETAT_COLORS[z.etat],border:`1px solid ${ETAT_COLORS[z.etat]}44`}}>{z.etat}</span>:<span style={{fontSize:12,color:"var(--muted)"}}>—</span>}
                           {z?.note&&<div style={{fontSize:12,color:"var(--muted)",marginTop:4}}>{z.note}</div>}
-                          <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:6}}>{photos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:6}}>{photos.map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn" title="Pivoter 90°" disabled={!!rotatingKey} onClick={()=>rotateDossierPhoto(p.url)} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===p.url?"…":"↻"}</button></div>))}</div>
                         </div>
                       ))}
                     </div>
@@ -3424,7 +3463,7 @@ export default function App() {
                     {[{label:"DÉPART",photos:depSup},{label:"RETOUR",photos:retSup}].map(({label,photos})=>(
                       <div key={label} style={{flex:1,padding:"10px 12px",background:"#fff",borderRight:label==="DÉPART"?"1px solid var(--border)":"none"}}>
                         <div style={{fontSize:9,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase",marginBottom:6}}>{label}</div>
-                        {photos.length?<div style={{display:"flex",flexWrap:"wrap",gap:4}}>{photos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>:<span style={{fontSize:12,color:"var(--muted)"}}>—</span>}
+                        {photos.length?<div style={{display:"flex",flexWrap:"wrap",gap:4}}>{photos.map((p,i)=>(<div key={i} style={{position:"relative"}}><img src={p.url} alt="" className="photo-thumb"/><button className="btn" title="Pivoter 90°" disabled={!!rotatingKey} onClick={()=>rotateDossierPhoto(p.url)} style={{position:"absolute",top:2,left:2,padding:"2px 4px",fontSize:9,background:"rgba(255,255,255,.92)",border:"1px solid var(--border2)",color:"var(--primary)"}}>{rotatingKey===p.url?"…":"↻"}</button></div>))}</div>:<span style={{fontSize:12,color:"var(--muted)"}}>—</span>}
                       </div>
                     ))}
                   </div>
