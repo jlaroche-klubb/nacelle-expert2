@@ -2065,12 +2065,12 @@ export default function App() {
   async function uploadVenteRaw(file, immat, slotKey) {
     const base64 = await photoToBase64(file);
     const compressed = await compressBase64(base64, 1600, 0.82);
-    const timestamp = Date.now();
-    const rand = Math.random().toString(36).slice(2, 8);
-    const storagePath = `photos-ventes/${immat}/${slotKey}/${timestamp}_${rand}.jpg`;
-    const storageRef = ref(storage, storagePath);
-    await uploadString(storageRef, compressed, "data_url");
-    return await getDownloadURL(storageRef);
+    // 📂 Même stockage que les photos détourées (photos-detourees/...),
+    // chemin AUTORISÉ par les règles Storage. L'ancien chemin
+    // photos-ventes/... n'était pas couvert par les règles →
+    // « storage/unauthorized » sur les photos d'habitacle uniquement
+    // (les 3/4, détourées, passaient déjà par le bon chemin).
+    return await uploadDetoureedPhotoToStorage(compressed, immat, slotKey, slotKey, "retour");
   }
 
   // Recherche dans l'onglet Photos de ventes : charge le dossier s'il existe
