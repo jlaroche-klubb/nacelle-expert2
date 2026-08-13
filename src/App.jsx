@@ -2123,8 +2123,13 @@ export default function App() {
       }, { merge:true });
       setVentePhotosLibres(prev=>({ ...prev, [slot.key]: { url, type:"storage" } }));
 
-      // 2) SI un dossier existe : mise à jour classique (rapport + resynchronisation)
-      if(activeDossier?.immat) {
+      // 2) SI un dossier existe AVEC UN RETOUR : mise à jour classique
+      //    (rapport + resynchronisation). ⚠️ Sans retour (machine en location,
+      //    pré-rempli...), on ne touche PAS au dossier : créer un « retour »
+      //    vide le faisait passer en « Retour traité » et Delta VO importait
+      //    une restitution alors que la machine était encore chez le client.
+      //    La photo reste dans photos_ventes/{IMMAT}, que Delta VO lit déjà.
+      if(activeDossier?.immat && activeDossier.retour) {
         const updated = {
           ...activeDossier,
           retour: {
