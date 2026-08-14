@@ -2103,7 +2103,8 @@ export default function App() {
   // Upload brut d'une photo de ventes (habitacles) — indépendant de la vue courante
   async function uploadVenteRaw(file, immat, slotKey) {
     const base64 = await photoToBase64(file);
-    const compressed = await compressBase64(base64, 1600, 0.82);
+    let compressed = await compressBase64(base64, 1600, 0.82);
+    compressed = await fixOrientationIA(compressed);
     // 📂 Même stockage que les photos détourées (photos-detourees/...),
     // chemin AUTORISÉ par les règles Storage. L'ancien chemin
     // photos-ventes/... n'était pas couvert par les règles →
@@ -2130,6 +2131,34 @@ export default function App() {
   // FONCTIONNE MÊME SANS DOSSIER D'EXPERTISE : les photos sont toujours écrites dans
   // la collection photos_ventes/{IMMAT} (lue par Delta VO), et EN PLUS dans
   // retour.commercialPhotos si un dossier existe (compat + resync Delta VO).
+  // 🤖 Redresse une image si besoin (même contrôle IA que les uploads de
+  // dossier) : miniature envoyée à /api/photo-orientation, rotation appliquée
+  // si l'IA répond 90/180/270. Best-effort : en cas d'échec ou d'absence de
+  // clé côté serveur, l'image d'origine est renvoyée telle quelle.
+  async function fixOrientationIA(base64) {
+    try {
+      const thumb = await compressBase64(base64, 384, 0.6);
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 8000);
+      const resp = await fetch("https://delta-vo.vercel.app/api/photo-orientation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: thumb }),
+        signal: ctl.signal
+      });
+      clearTimeout(timer);
+      if (resp.ok) {
+        const j = await resp.json().catch(() => ({}));
+        const rot = Number(j?.rotation) || 0;
+        if (rot === 90 || rot === 180 || rot === 270) {
+          console.log(`🤖 Photo de ventes redressée de ${rot}°`);
+          return await rotateImageDeg(base64, rot);
+        }
+      }
+    } catch (e) { console.warn("Contrôle orientation IA (ventes):", e?.message || e); }
+    return base64;
+  }
+
   async function captureVentePhoto(slot) {
     const immat = (activeDossier?.immat || venteImmat || "").trim().toUpperCase();
     if(!immat) return;
@@ -2141,7 +2170,14 @@ export default function App() {
     try {
       let url = null;
       if(slot.detour) {
-        const b64 = await photoToBase64(file);
+        // ✅ Redressement AVANT détourage : la photo brute du téléphone
+        // partait telle quelle chez remove.bg, qui ignore l'étiquette EXIF
+        // d'orientation → sujet couché dans la composition (photos de fiche
+        // à l'envers dans Delta VO). On normalise l'orientation (EXIF via
+        // compressBase64 + contrôle IA) avant le détourage.
+        let b64 = await photoToBase64(file);
+        b64 = await compressBase64(b64, 2000, 0.92);
+        b64 = await fixOrientationIA(b64);
         const removed = await removeBackground(b64);
         if(!removed) throw new Error("Détourage impossible");
         const composed = await composeCommercialPhoto(removed, immat, DELTA_LOGO);
