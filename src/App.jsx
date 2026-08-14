@@ -942,7 +942,7 @@ export default function App() {
   const [zoneEdit,setZoneEdit]=useState(null);
   const [tarifForm,setTarifForm]=useState({zone:"",label:"",prix:"",surDevis:false,bareme:[]});
   // Admin → Emails : destinataires des envois automatiques (une adresse par ligne)
-  const [emailsCfg,setEmailsCfg]=useState({retour_to:"",devis_to:"",cc_assistanat:"",compta_to:""});
+  const [emailsCfg,setEmailsCfg]=useState({retour_to:"",devis_to:"",cc_assistanat:"",compta_to:"",rapport_adv_to:""});
   const [emailsCfgLoaded,setEmailsCfgLoaded]=useState(false);
   const [tarifEdit,setTarifEdit]=useState(null);
 
@@ -1308,6 +1308,7 @@ export default function App() {
           devis_to:(eC.devis_to||[]).join("\n"),
           cc_assistanat:(Array.isArray(eC.cc_assistanat)?eC.cc_assistanat:[eC.cc_assistanat].filter(Boolean)).join("\n"),
           compta_to:(eC.compta_to||[]).join("\n"),
+          rapport_adv_to:(eC.rapport_adv_to||[]).join("\n"),
         });
         setEmailsCfgLoaded(true);
       } catch(e){ console.warn("Config emails non chargée:", e); }
@@ -1983,7 +1984,7 @@ export default function App() {
   // Admin → Emails : enregistre les destinataires des envois automatiques
   async function saveEmailsCfg() {
     const parse=(s)=>String(s||"").split(/[\n,;]+/).map(x=>x.trim()).filter(Boolean);
-    const bad=[...parse(emailsCfg.retour_to),...parse(emailsCfg.devis_to),...parse(emailsCfg.cc_assistanat),...parse(emailsCfg.compta_to)]
+    const bad=[...parse(emailsCfg.retour_to),...parse(emailsCfg.devis_to),...parse(emailsCfg.cc_assistanat),...parse(emailsCfg.compta_to),...parse(emailsCfg.rapport_adv_to)]
       .filter(e=>!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
     if(bad.length){ alert("Adresse(s) invalide(s) :\n"+bad.join("\n")); return; }
     await fbSaveConfig("emails",{
@@ -1991,6 +1992,7 @@ export default function App() {
       devis_to:parse(emailsCfg.devis_to),
       cc_assistanat:parse(emailsCfg.cc_assistanat),
       compta_to:parse(emailsCfg.compta_to),
+      rapport_adv_to:parse(emailsCfg.rapport_adv_to),
       updatedAt:new Date().toISOString(),
     });
     flash("Destinataires enregistrés ✓");
@@ -3750,6 +3752,11 @@ export default function App() {
                       <label>💶 Mise à jour des VNC (service compta)</label>
                       <textarea rows={2} value={emailsCfg.compta_to} onChange={e=>setEmailsCfg({...emailsCfg,compta_to:e.target.value})} placeholder="compta@delta-services.fr" style={{width:"100%",fontFamily:"monospace",fontSize:13}}/>
                       <div style={{fontSize:11,color:"var(--muted)"}}>Reçoivent le fichier VNC du parc VO automatiquement le 1er et le 16 de chaque mois.</div>
+                    </div>
+                    <div style={{marginBottom:14}}>
+                      <label>📊 Rapport hebdo suivi facturation (chef des secrétaires)</label>
+                      <textarea rows={2} value={emailsCfg.rapport_adv_to} onChange={e=>setEmailsCfg({...emailsCfg,rapport_adv_to:e.target.value})} placeholder="chef.secretaires@delta-services.fr" style={{width:"100%",fontFamily:"monospace",fontSize:13}}/>
+                      <div style={{fontSize:11,color:"var(--muted)"}}>Reçoivent chaque vendredi à 9h00 l'état Delta VO : remises en état à facturer, facturées pas réglées, préparations prêtes pas facturées, clôturées pas réglées.</div>
                     </div>
                     <button className="btn btn-gold" onClick={saveEmailsCfg}>✓ Enregistrer</button>
                   </div>
