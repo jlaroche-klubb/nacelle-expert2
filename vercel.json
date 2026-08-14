@@ -1,11 +1,11 @@
 {
   "crons": [
     {
-      "path": "/api/cron-vnc-compta",
+      "path": "/api/cron-taches",
       "schedule": "0 5 1,16 * *"
     },
     {
-      "path": "/api/cron-rapport-adv",
+      "path": "/api/cron-taches",
       "schedule": "0 7 * * 5"
     }
   ]
