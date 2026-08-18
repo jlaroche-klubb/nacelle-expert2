@@ -1805,9 +1805,34 @@ export default function App() {
     }
   }
 
+  // 🧮 Nombre total de photos d'une expertise (photos par catégorie + zones),
+  // bac "a_trier" exclu — sert aux garde-fous anti-expertise vide.
+  function comptePhotosExpertise(photosMap, zonesMap) {
+    let n = 0;
+    for (const [k, arr] of Object.entries(photosMap || {})) {
+      if (k === "a_trier") continue;
+      if (Array.isArray(arr)) n += arr.length;
+    }
+    for (const z of Object.values(zonesMap || {})) {
+      if (Array.isArray(z?.photos)) n += z.photos.length;
+    }
+    return n;
+  }
+
   // Validation du départ (photos non triées confirmées, sauvegarde, retour accueil)
   // — factorisée pour être appelée depuis le haut ET le bas de l'écran de rapport.
   async function validerDepart() {
+    // 🛡️ GARDE-FOU (cas GW-453-KX) : un départ validé VIDE — sans agent ni
+    // photo — faisait croire à Delta VO que la machine était partie en
+    // location. Agent et au moins une photo sont désormais obligatoires.
+    if (!String(depForm.agent || "").trim()) {
+      alert("⚠ Validation impossible : indiquez le NOM DE L'AGENT dans le formulaire.");
+      return;
+    }
+    if (comptePhotosExpertise(depPhotos, depZones) === 0) {
+      alert("⚠ Validation impossible : cette expertise départ ne contient AUCUNE photo.\n\nAjoutez au moins une photo (tour complet, zone ou photo libre) avant de valider.");
+      return;
+    }
     const pending=(depPhotos["a_trier"]||[]).length;
     if(pending&&!window.confirm(`${pending} photo${pending>1?"s":""} du bac d'import n'${pending>1?"ont":"a"} pas été affectée${pending>1?"s":""} et ser${pending>1?"ont":"a"} abandonnée${pending>1?"s":""}.\n\nValider quand même ?`)) return;
     await saveDepart();
@@ -1876,6 +1901,16 @@ export default function App() {
   }
   async function saveRetour() {
     if(!foundDossier) return;
+    // 🛡️ GARDE-FOU : pas de retour validé sans agent ni photo (même logique
+    // que le départ — une expertise vide fausse le suivi Delta VO).
+    if (!String(retForm.agent || "").trim()) {
+      alert("⚠ Validation impossible : indiquez le NOM DE L'AGENT dans le formulaire.");
+      return null;
+    }
+    if (comptePhotosExpertise(retPhotos, retZones) === 0) {
+      alert("⚠ Validation impossible : cette expertise retour ne contient AUCUNE photo.\n\nAjoutez au moins une photo (tour complet, zone ou photo libre) avant de valider.");
+      return null;
+    }
 
     // ── Correction d'immatriculation (faute de frappe) ──
     // Le dossier est indexé par immat dans Firestore : si elle a changé,
