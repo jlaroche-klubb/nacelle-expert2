@@ -2428,7 +2428,14 @@ export default function App() {
             {loading&&filteredDossiers.length===0&&<div style={{textAlign:"center",color:"var(--muted)",padding:40}}>Chargement des dossiers…</div>}
             {!loading&&filteredDossiers.length===0&&<div style={{textAlign:"center",color:"var(--muted)",padding:32,border:"1px dashed var(--border)",fontSize:13}}>Aucun dossier</div>}
             {filteredDossiers.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(d=>(
-              <div key={d.immat} className="dossier-card" style={{marginBottom:6}} onClick={()=>{setActiveDossier(d);setView("rapport");}}>
+              <div key={d.immat} className="dossier-card" style={{marginBottom:6}} onClick={async()=>{
+                // 🔄 Affichage immédiat PUIS relecture FRAÎCHE du serveur : sans ça,
+                // un rapport ouvert depuis une page restée chargée montrait la version
+                // périmée du dossier (cas GW-453-KX : rapport imprimé vide alors que
+                // le retour et ses photos étaient bien en base).
+                setActiveDossier(d);setView("rapport");
+                try { const frais = await fetchDossier(d.immat, true); if (frais) { setActiveDossier(frais); setDossiers(prev=>({ ...prev, [frais.immat]: frais })); } } catch(e) { console.warn("Relecture dossier:", e); }
+              }}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap"}}>
                     <span className="mono" style={{color:"var(--primary)",fontSize:14,fontWeight:700}}>{d.immat}</span>
