@@ -913,6 +913,36 @@ function SignaturePad({ value, onChange }) {
 
 export default function App() {
   const [view,setView]=useState("home");
+
+  // 🔄 MISE À JOUR AUTOMATIQUE (validée avec Jonathan) : une page laissée
+  // ouverte des jours sur une tablette continue de tourner sur l'ANCIENNE
+  // version (cas du contrôle IA d'orientation absent le 18/08). À chaque
+  // retour sur l'onglet (et toutes les 30 min), on compare le nom du bundle
+  // JS servi par le serveur avec celui réellement chargé :
+  //  • nouvelle version + écran ACCUEIL → rechargement automatique ;
+  //  • nouvelle version en pleine saisie → petit bandeau « Recharger »
+  //    (jamais de rechargement forcé : les brouillons sont sauvegardés,
+  //    mais on ne coupe pas un expert en plein travail).
+  const [majDispo,setMajDispo]=useState(false);
+  useEffect(()=>{
+    let stop=false;
+    const scriptActuel=(document.querySelector('script[src*="/assets/index-"]')?.src||"").split("/").pop();
+    async function verifierVersion(){
+      try{
+        const html=await fetch("/",{cache:"no-store"}).then(r=>r.text());
+        const m=html.match(/assets\/(index-[^"']+\.js)/);
+        if(!stop&&m&&scriptActuel&&m[1]!==scriptActuel) setMajDispo(true);
+      }catch(e){/* hors-ligne : on réessaiera au prochain passage */}
+    }
+    const onVisible=()=>{ if(document.visibilityState==="visible") verifierVersion(); };
+    document.addEventListener("visibilitychange",onVisible);
+    const iv=setInterval(verifierVersion,30*60*1000);
+    verifierVersion();
+    return ()=>{ stop=true; document.removeEventListener("visibilitychange",onVisible); clearInterval(iv); };
+  },[]);
+  useEffect(()=>{
+    if(majDispo&&view==="home") window.location.reload();
+  },[majDispo,view]);
   const [uploadingCount, setUploadingCount] = useState(0);
   const [savingRetour, setSavingRetour] = useState(false);
   const [dossiers,setDossiers]=useState({});
@@ -1057,12 +1087,12 @@ export default function App() {
 
   // Auth states
   const [currentUser,setCurrentUser]=useState(null);
-  const [userProfile,setUserProfile]=useState(null);
+  const [userProfile,setUserProfile]=useState(null);
   const [accessPending,setAccessPending]=useState(false); // demande d'accès envoyée, en attente de validation
   const [authLoading,setAuthLoading]=useState(true);
   const [users,setUsers]=useState([]);
   const [showUserManagement,setShowUserManagement]=useState(false);
-  const [userForm,setUserForm]=useState({email:"",nom:"",prenom:"",role:"expert"});
+  const [userForm,setUserForm]=useState({email:"",nom:"",prenom:"",role:"expert"});
   const [pendingRole,setPendingRole]=useState({}); // rôle choisi pour chaque demande d'accès (uid → rôle)
   // 🏆 Super admin : identifié par le compte connecté (rôle « superadmin »).
   // Amorçage : jlaroche@klubb.com est toujours super admin (anti-verrouillage).
@@ -3670,6 +3700,14 @@ export default function App() {
       <div style={{textAlign:"center",padding:"16px",fontSize:11,color:"var(--muted)",borderTop:"1px solid var(--border)",marginTop:20}} className="no-print">
         © {new Date().getFullYear()} Delta Services · Application propriétaire · Tous droits réservés · Reproduction interdite
       </div>
+
+      {/* 🔄 Nouvelle version disponible — proposé sans jamais couper une saisie */}
+      {majDispo&&(
+        <div className="no-print" style={{position:"fixed",bottom:14,left:"50%",transform:"translateX(-50%)",zIndex:3000,background:"var(--primary)",color:"#fff",padding:"10px 16px",borderRadius:8,boxShadow:"0 6px 24px rgba(0,0,0,.3)",display:"flex",gap:12,alignItems:"center",fontSize:13}}>
+          🔄 Nouvelle version disponible
+          <button className="btn btn-gold btn-sm" onClick={()=>window.location.reload()}>Recharger</button>
+        </div>
+      )}
 
       {/* LIGHTBOX — clic sur une photo pour l'agrandir */}
       {lightboxUrl&&(
