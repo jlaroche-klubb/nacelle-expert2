@@ -94,6 +94,68 @@ export const DEFAULT_TARIFS = [
   { id: "manuel_utilisation", zone: "nettoyage", label: "Manuel d'utilisation — manquant", prix: 60 },
   { id: "nettoyage_interieur", zone: "nettoyage", label: "Nettoyage intérieur", prix: 100 },
   { id: "nettoyage_exterieur", zone: "nettoyage", label: "Nettoyage extérieur", prix: 70 },
+
+  // ─── Postes ajoutés depuis la grille FRE prix (PDF Jonathan, 21/08/2026) ───
+  // Seuls les postes CHIFFRÉS et absents de la liste ci-dessus sont repris.
+  // Grâce à la fusion au chargement (src/App.jsx), ils apparaissent
+  // automatiquement dans Admin → Postes tarifaires sans écraser l'existant.
+  // CARROSSERIE
+  { id: "aile_avant", zone: "carrosserie", label: "Aile avant — cassée / tordue", prix: 325 },
+  { id: "aile_arriere", zone: "carrosserie", label: "Aile arrière — cassée / tordue", prix: 325 },
+  { id: "bas_de_caisse", zone: "carrosserie", label: "Bas de caisse", prix: 104 },
+  { id: "capot_calandre", zone: "carrosserie", label: "Capot / calandre", prix: 201.5 },
+  { id: "porte_laterale", zone: "carrosserie", label: "Porte latérale", prix: 1457.3 },
+  { id: "trappe_carburant", zone: "carrosserie", label: "Trappe carburant", prix: 78 },
+  // OPTIQUES
+  { id: "veilleuse", zone: "optiques", label: "Veilleuse — cassée", prix: 31.2 },
+  { id: "feu_de_plaque", zone: "optiques", label: "Feu de plaque", prix: 66.71 },
+  { id: "ampoule", zone: "optiques", label: "Ampoule", prix: 13 },
+  // ROUES
+  { id: "enjoliveur", zone: "roues", label: "Enjoliveur — cassé ou manquant", prix: 65 },
+  { id: "cale_roue", zone: "roues", label: "Cale de roue — l'unité", prix: 66.3 },
+  { id: "kit_crevaison", zone: "roues", label: "Kit crevaison — manquant", prix: 65 },
+  // INTÉRIEUR / ÉQUIPEMENT
+  { id: "antenne_autoradio", zone: "interieur", label: "Antenne autoradio", prix: 9.08 },
+  { id: "aerateurs", zone: "interieur", label: "Ventilation / aérateurs", prix: 78 },
+  { id: "documents_bord", zone: "interieur", label: "Documents de bord — manquants", prix: 39 },
+  { id: "gilet_securite", zone: "interieur", label: "Gilet de sécurité — manquant", prix: 11.7 },
+  { id: "triangle_secu", zone: "interieur", label: "Triangle — manquant", prix: 13 },
+  { id: "plan_travail", zone: "interieur", label: "Plan de travail — cassé (MO 97,50 € en sus)", prix: 560.49 },
+  { id: "tiroir_meuble", zone: "interieur", label: "Tiroir meuble plan de travail", prix: 39 },
+  { id: "meuble_bacs", zone: "interieur", label: "Meuble à bacs — cassé (MO 97,50 € en sus)", prix: 393.12 },
+  { id: "lampe_travail", zone: "interieur", label: "Lampe de travail", prix: 39 },
+  { id: "garniture", zone: "interieur", label: "Garniture", prix: 634.4 },
+  { id: "seuil_porte", zone: "interieur", label: "Seuil de porte (MO 32,50 € en sus)", prix: 9.36 },
+  { id: "doseur_savon", zone: "interieur", label: "Équipement propreté — doseur savon", prix: 25.35 },
+  { id: "porte_jerrycan", zone: "interieur", label: "Équipement propreté — porte jerrycan", prix: 44.07 },
+  { id: "derouleur_papier", zone: "interieur", label: "Équipement propreté — dérouleur papier", prix: 25.4 },
+  { id: "montage_proprete", zone: "interieur", label: "Équipement propreté — montage (par pièce)", prix: 65 },
+  { id: "camera_recul", zone: "interieur", label: "Caméra de recul (MO 195 € en sus)", prix: 192.07 },
+  { id: "capteur_recul", zone: "interieur", label: "Capteur de recul (MO 130 € en sus)", prix: 96.52 },
+  { id: "bouton_fre", zone: "interieur", label: "Bouton FRE", prix: 35.1 },
+  { id: "bouton_pto", zone: "interieur", label: "Bouton PTO", prix: 35.1 },
+  // NACELLE
+  { id: "poste_bas", zone: "nacelle", label: "Poste bas — cassé", prix: 858 },
+  { id: "poste_haut", zone: "nacelle", label: "Poste haut — cassé", prix: 156 },
+  { id: "contact_clef", zone: "nacelle", label: "Contact bas + clef", prix: 54.36 },
+  { id: "capteur_devers", zone: "nacelle", label: "Capteur de dévers", prix: 863.25 },
+  { id: "porte_panier", zone: "nacelle", label: "Porte panier", prix: 422.55 },
+  { id: "bouton_pompe_secours", zone: "nacelle", label: "Bouton pompe de secours", prix: 39 },
+  { id: "bandeau", zone: "nacelle", label: "Bandeau — cassé / tordu", prix: 4548.7 },
+  { id: "feux_plateforme", zone: "nacelle", label: "Feux plateforme (MO comprise)", prix: 312 },
+  { id: "veilleuse_plateforme", zone: "nacelle", label: "Veilleuse plateforme", prix: 31.2 },
+  { id: "carter_pompe_secours", zone: "nacelle", label: "Carter pompe secours", prix: 1206.75 },
+  { id: "consigne_securite", zone: "nacelle", label: "Consigne de sécurité 120/200 kg", prix: 85.8 },
+  { id: "reflecto_panier", zone: "nacelle", label: "Réflecteur panier", prix: 85.8 },
+  { id: "joystick", zone: "nacelle", label: "Joystick", prix: 130 },
+  { id: "bouton_stabilisateur", zone: "nacelle", label: "Bouton stabilisateur", prix: 133.9 },
+  { id: "stabilisateur", zone: "nacelle", label: "Stabilisateur", prix: 133.9 },
+  { id: "plaque_repartition", zone: "nacelle", label: "Plaque de répartition", prix: 119.37 },
+  { id: "fourreau_stabilisateur", zone: "nacelle", label: "Fourreau stabilisateur", prix: 637.81 },
+  // DIVERS
+  { id: "destickage", zone: "nettoyage", label: "Destickage", prix: 89.7 },
+  { id: "forfait_plaquette", zone: "nettoyage", label: "Forfait plaquette", prix: 180 },
+  { id: "frais_administratifs", zone: "nettoyage", label: "Frais administratifs", prix: 60 },
 ];
 
 // ─── Barème de vétusté et calculs partagés (identiques à src/App.jsx) ───
