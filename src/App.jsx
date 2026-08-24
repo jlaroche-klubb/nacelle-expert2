@@ -618,12 +618,13 @@ async function composeCommercialPhoto(subjectBase64, immat, logoB64) {
       const contentW = maxX - minX + 1;
       const contentH = maxY - minY + 1;
 
-      // Zone disponible avec marge minimale de 16px
+      // 🖼️ Vraie marge (~7 % du cadre) : la machine ne touche plus les bords
+      // (demande Jonathan). Agrandissement limité à 1.15× contre le flou.
       const avail = H - barH - 5;
-      const margin = 4;
+      const margin = Math.round(W * 0.07);
       const maxW = W - margin * 2;
       const maxH = avail - margin * 2;
-      const scale = Math.min(maxW / contentW, maxH / contentH);
+      const scale = Math.min(maxW / contentW, maxH / contentH, 1.15);
       const sw = contentW * scale;
       const sh = contentH * scale;
       const sx = (W - sw) / 2;
