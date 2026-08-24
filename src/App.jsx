@@ -529,7 +529,9 @@ async function removeBackground(base64) {
     form.append("image_file", blob);
     // Pro+ : haute résolution 4K + détection véhicule + ombre portée
     form.append("size", "4k");          // qualité 4K (consomme plus de crédits que "auto")
-    form.append("type", "car");         // détection orientée véhicule (nacelle/PEMP)
+    // "auto" (et non "car") : le profil voiture amputait parfois la cabine
+    // ou le plateau d'une nacelle sur porteur (cas DS2294)
+    form.append("type", "auto");
     form.append("shadow_type", "drop"); // ombre portée (options: drop, car, 3D, none)
     form.append("shadow_opacity", "55");
     const resp = await fetch("https://api.remove.bg/v1.0/removebg", {
@@ -550,7 +552,7 @@ async function removeBackgroundFromUrl(imageUrl) {
     const form = new FormData();
     form.append("image_url", imageUrl);
     form.append("size", "4k");
-    form.append("type", "car");
+    form.append("type", "auto"); // profil « auto » (voir plus haut)
     form.append("shadow_type", "drop");
     form.append("shadow_opacity", "55");
     const resp = await fetch("https://api.remove.bg/v1.0/removebg", {
