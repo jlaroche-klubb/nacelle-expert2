@@ -1725,6 +1725,76 @@ export default function App() {
     } finally { setRotatingKey(null); }
   }
 
+  // ─── 🤖 FILET DE SÉCURITÉ (validé avec Jonathan) : redressement IA groupé ───
+  // Passe TOUTES les photos du dossier au contrôle d'orientation IA et pivote
+  // celles qui sont couchées (cas d'un appareil dont le contrôle à l'envoi a
+  // échoué — réseau, vieille version...). Même mécanique que le bouton ↻ :
+  // nouvelle URL en Storage + remplacement partout dans le dossier, SANS
+  // toucher au marqueur de synchro Delta VO.
+  const [redresseEtat,setRedresseEtat]=useState(null); // {fait,total,corrigees}
+  function listeUrlsDossier(d){
+    const urls=new Set();
+    for (const part of [d?.depart, d?.retour]) {
+      if (!part) continue;
+      for (const arr of Object.values(part.photos||{})) if(Array.isArray(arr)) arr.forEach(ph=>{const u=typeof ph==="string"?ph:ph?.url; if(u) urls.add(u);});
+      for (const z of Object.values(part.zones||{})) if(Array.isArray(z?.photos)) z.photos.forEach(ph=>{const u=typeof ph==="string"?ph:ph?.url; if(u) urls.add(u);});
+    }
+    return Array.from(urls);
+  }
+  async function miniatureDepuisUrl(url){
+    const img=await new Promise((res,rej)=>{const i=new Image();i.crossOrigin="anonymous";i.onload=()=>res(i);i.onerror=()=>rej(new Error("chargement image"));i.src=url;});
+    const sc=Math.min(1,384/Math.max(img.naturalWidth,img.naturalHeight));
+    const c=document.createElement("canvas");
+    c.width=Math.max(1,Math.round(img.naturalWidth*sc));
+    c.height=Math.max(1,Math.round(img.naturalHeight*sc));
+    c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+    return c.toDataURL("image/jpeg",0.6);
+  }
+  async function redresserPhotosIA(){
+    if(!activeDossier||redresseEtat) return;
+    if(activeDossier.archived){ alert("Cycle archivé : consultation seule."); return; }
+    const urls=listeUrlsDossier(activeDossier);
+    if(!urls.length){ alert("Aucune photo dans ce dossier."); return; }
+    if(!window.confirm(`Vérifier l'orientation des ${urls.length} photos du dossier avec l'IA et redresser automatiquement celles qui sont couchées ?`)) return;
+    setRedresseEtat({fait:0,total:urls.length,corrigees:0});
+    const remplacements=[]; const echecs=[];
+    for (const url of urls) {
+      try {
+        const thumb=await miniatureDepuisUrl(url);
+        const ctrl=new AbortController(); const tid=setTimeout(()=>ctrl.abort(),15000);
+        const resp=await fetch("https://delta-vo.vercel.app/api/photo-orientation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({imageBase64:thumb,ctx:`bouton rapport ${activeDossier.immat||""}`}),signal:ctrl.signal});
+        clearTimeout(tid);
+        const j=await resp.json().catch(()=>null);
+        const rot=Number(j?.rotation)||0;
+        if(resp.ok&&(rot===90||rot===180||rot===270)){
+          const tournee=await rotateImageDeg(url,rot);
+          if(tournee){
+            const immat=(activeDossier.immat||"no-immat").replace(/[^A-Z0-9-]/gi,"_");
+            const storagePath=`dossiers/${immat}/rotations/rapport/${Date.now()}_${Math.random().toString(36).slice(2,8)}.jpg`;
+            const storageRef=ref(storage,storagePath);
+            await withTimeout(uploadString(storageRef,tournee,"data_url"),90000,"envoi photo redressée");
+            const nouvelle=await withTimeout(getDownloadURL(storageRef),30000,"récupération URL");
+            remplacements.push([url,nouvelle]);
+          }
+        }
+      } catch(e){ echecs.push(e?.message||String(e)); }
+      setRedresseEtat(prev=>prev?{...prev,fait:prev.fait+1,corrigees:remplacements.length}:prev);
+    }
+    try {
+      if(remplacements.length){
+        let maj={...activeDossier};
+        for(const [ancienne,nouvelle] of remplacements) maj=replaceUrlDeep(maj,ancienne,nouvelle);
+        delete maj._renamedFrom;
+        await setDoc(doc(db,"dossiers",maj.immat),maj);
+        setDossiers(prev=>({...prev,[maj.immat]:maj}));
+        setActiveDossier(maj);
+      }
+      alert(`🤖 ${urls.length} photo(s) vérifiée(s) — ${remplacements.length} redressée(s).`+(echecs.length?`
+⚠ ${echecs.length} photo(s) n'ont pas pu être vérifiées — relancez le bouton pour réessayer.`:""));
+    } catch(e){ alert("Enregistrement impossible : "+e.message); }
+    finally { setRedresseEtat(null); }
+  }
+
   // ─── Tri des photos importées en lot (expertise retour) ───
   // Déplace une photo du bac "a_trier" vers une section, un angle du tour ou un dégât.
   // Si c'est un dégât, il est coché automatiquement (quantité 1 par défaut).
@@ -3485,6 +3555,11 @@ export default function App() {
               <div style={{display:"flex",gap:8}}>
                 <button className="btn btn-outline btn-sm no-print" onClick={goHome}>← Dossiers</button>
                 {activeDossier.retour&&!activeDossier.archived&&<button className="btn btn-accent btn-sm no-print" onClick={()=>editRetour(activeDossier)}>✎ Modifier le retour</button>}
+                {(isSuperAdmin||userProfile?.role==="admin")&&!activeDossier.archived&&(
+                  <button className="btn btn-outline btn-sm no-print" disabled={!!redresseEtat} title="Vérifie chaque photo avec l'IA et pivote celles qui sont couchées" onClick={redresserPhotosIA}>
+                    {redresseEtat?`🤖 ${redresseEtat.fait}/${redresseEtat.total} (${redresseEtat.corrigees} redressée${redresseEtat.corrigees>1?"s":""})…`:"🤖 Redresser les photos (IA)"}
+                  </button>
+                )}
                 <button className="btn btn-outline btn-sm no-print" onClick={()=>window.print()}>⬇ PDF</button>
                 {activeDossier.info?.email && (
                   <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(activeDossier.info.email, activeDossier.immat, "retour", activeDossier)}>📧 Email</button>
