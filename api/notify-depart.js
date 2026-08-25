@@ -14,6 +14,8 @@
 
 import admin from "firebase-admin";
 
+export const maxDuration = 60; // redressement serveur des photos (jusqu'à ~40 s)
+
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)),
@@ -107,6 +109,18 @@ export default async function handler(req, res) {
       console.error("Brevo (depart):", resp.status, detail);
       res.status(502).json({ error: "Envoi Brevo échoué (" + resp.status + ")", detail });
       return;
+    }
+
+
+    // 🤖 REDRESSEMENT SERVEUR DES PHOTOS (validé avec Jonathan) : le serveur,
+    // toujours à jour, vérifie et redresse les photos couchées du dossier —
+    // insensible aux vieilles versions de l'appli restées ouvertes sur les
+    // téléphones (cas Samsung). Best-effort : n'empêche jamais la réponse.
+    try {
+      const { redresserPhotosDossier } = await import("./_redresse-photos.js");
+      await redresserPhotosDossier(admin, b.immat, "départ " + b.immat);
+    } catch (e) {
+      console.warn("⚠ redressement serveur ignoré:", e?.message || e);
     }
 
     res.status(200).json({ ok: true, to: clientEmail });
