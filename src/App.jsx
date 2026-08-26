@@ -76,7 +76,7 @@ async function notifyRapportExpertise(dossier, tarifs, isUpdate) {
     // "+ postes sur devis" : uniquement s'il reste des postes sur devis SANS montant saisi
     const surDevis = (dossier.retour?.degats || []).some(id => {
       const t = tarifs.find(t => t.id === id);
-      return t?.surDevis && !md[id];
+      return t?.surDevis && !md[id] && !(dossier.devis_recu?.[id]?.inclus);
     });
     const resp = await fetch("/api/notify-rapport", {
       method: "POST",
@@ -736,7 +736,7 @@ async function generateReportHTML(dossier, tarifs, zones, vetusteTaux) {
     const t=tarifs.find(t=>t.id===id);
     if(!t) return '';
     const prix = t.surDevis
-      ? (mdReport[id] ? Number(mdReport[id]).toLocaleString('fr-FR')+'&nbsp;€' : 'Sur devis')
+      ? (dossier.devis_recu?.[id]?.inclus ? 'Inclus au devis' : (mdReport[id] ? Number(mdReport[id]).toLocaleString('fr-FR')+'&nbsp;€' : 'Sur devis'))
       : Math.round(t.prix*(1+vetusteTaux/100))+'&nbsp;€';
     const tranche = tdReport[id] ? ` <span style="color:#889;font-size:11px;">(${tdReport[id]})</span>` : '';
     return `<tr><td style="padding:8px 12px;border-bottom:1px solid #e0e4ea;">${t.label}${tranche}</td><td style="padding:8px 12px;border-bottom:1px solid #e0e4ea;text-align:right;font-weight:700;color:#1a2a6e;">${prix}</td></tr>`;
@@ -2045,6 +2045,27 @@ export default function App() {
       alert("⚠ Le PDF du rapport n'a pas pu être généré : " + e.message + "\nLe dossier sera quand même sauvegardé.");
     }
     
+    // ─── CARROSSERIE = CHIFFRAGE IMMÉDIAT (validé avec Jonathan) ───
+    // Seuls les postes de la zone « nacelle » peuvent partir en devis atelier.
+    // Un poste sur devis HORS nacelle laissé non chiffré prend automatiquement
+    // la 1re tranche de son barème ; sans barème, le montant est obligatoire.
+    const mdFinal={...retMontantsDevis};
+    const tdFinal={...retTranchesDevis};
+    {
+      const bloquants=[];
+      for (const id of retDegats) {
+        const t=tarifs.find(t=>t.id===id);
+        if (!t?.surDevis || mdFinal[id] || t.zone==="nacelle") continue;
+        if (Array.isArray(t.bareme)&&t.bareme.length&&Number(t.bareme[0].montant)>0) {
+          mdFinal[id]=Number(t.bareme[0].montant);
+          tdFinal[id]=t.bareme[0].label;
+        } else bloquants.push(t.label);
+      }
+      if (bloquants.length) {
+        alert("⚠ Montant obligatoire — seuls les postes NACELLE partent en devis atelier.\nSaisissez le montant pour :\n— "+bloquants.join("\n— "));
+        return;
+      }
+    }
     const updated={
       ...foundDossier,
       info:{...foundDossier.info, numero_cube: retForm.numero_cube || foundDossier.info?.numero_cube || ""},
@@ -2055,9 +2076,9 @@ export default function App() {
         tests:retTests,
         degats:retDegats,
         quantites:retQtes,
-        montants_devis:retMontantsDevis, // montants saisis en direct sur les postes "sur devis"
+        montants_devis:mdFinal, // montants saisis en direct (carrosserie : tranche 1 auto si non chiffré)
         // Tranches de barème choisies (libellés affichés dans le rapport) — hors saisie libre
-        tranches_devis:Object.fromEntries(Object.entries(retTranchesDevis).filter(([,v])=>v&&v!=="__LIBRE__")),
+        tranches_devis:Object.fromEntries(Object.entries(tdFinal).filter(([,v])=>v&&v!=="__LIBRE__")),
         note:retNote,
         date:retForm.date,
         heures:retForm.heures,
@@ -2080,7 +2101,7 @@ export default function App() {
     {
       const pendingIds = retDegats.filter(id => {
         const t = tarifs.find(t => t.id === id);
-        return t?.surDevis && !retMontantsDevis[id];
+        return t?.surDevis && t.zone==="nacelle" && !mdFinal[id];
       });
       if (pendingIds.length) {
         updated.devis_pending = pendingIds;
@@ -3324,7 +3345,7 @@ export default function App() {
                                     const dphotos=retPhotos[pkey]||[];
                                     return (
                                     <div key={t.id} style={{marginBottom:3}}>
-                                      <div className={`tarif-row ${checked?"active":""}`} style={{marginBottom:0}} onClick={()=>{const wasChecked=retDegats.includes(t.id);setRetDegats(prev=>wasChecked?prev.filter(d=>d!==t.id):[...prev,t.id]);setRetQtes(prev=>{const n={...prev};if(wasChecked){delete n[t.id];}else{n[t.id]=1;}return n;});setRetMontantsDevis(prev=>{if(!wasChecked)return prev;const n={...prev};delete n[t.id];return n;});setRetTranchesDevis(prev=>{if(!wasChecked)return prev;const n={...prev};delete n[t.id];return n;});}}>
+                                      <div className={`tarif-row ${checked?"active":""}`} style={{marginBottom:0}} onClick={()=>{const wasChecked=retDegats.includes(t.id);setRetDegats(prev=>wasChecked?prev.filter(d=>d!==t.id):[...prev,t.id]);setRetQtes(prev=>{const n={...prev};if(wasChecked){delete n[t.id];}else{n[t.id]=1;}return n;});setRetMontantsDevis(prev=>{const n={...prev};if(wasChecked){delete n[t.id];}else if(t.surDevis&&t.zone!=="nacelle"&&Array.isArray(t.bareme)&&t.bareme.length){n[t.id]=Number(t.bareme[0].montant)||0;}return n;});setRetTranchesDevis(prev=>{const n={...prev};if(wasChecked){delete n[t.id];}else if(t.surDevis&&t.zone!=="nacelle"&&Array.isArray(t.bareme)&&t.bareme.length){n[t.id]=t.bareme[0].label;}return n;});}}>
                                         <div style={{display:"flex",alignItems:"center",gap:10}}>
                                           <div style={{width:16,height:16,border:`2px solid ${checked?"var(--primary)":"var(--border2)"}`,background:checked?"var(--primary)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",flexShrink:0}}>{checked?"✓":""}</div>
                                           <span style={{fontSize:13}}>{t.label}{checked&&(retQtes[t.id]||1)>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {retQtes[t.id]}</span>}</span>
@@ -3382,7 +3403,7 @@ export default function App() {
                                                     }}
                                                     style={{maxWidth:280,padding:"6px 8px",border:"1px solid var(--border2)",fontSize:12,marginRight:10}}
                                                   >
-                                                    <option value="">Sur devis (non chiffré)</option>
+                                                    <option value="">{t.zone==="nacelle"?"Sur devis (non chiffré)":"Non chiffré (tranche 1 à la validation)"}</option>
                                                     {t.bareme.map(b=><option key={b.label} value={b.label}>{b.label} — {b.montant} €</option>)}
                                                     <option value="__LIBRE__">Autre montant…</option>
                                                   </select>
@@ -3483,9 +3504,9 @@ export default function App() {
                       <div style={{fontSize:10,letterSpacing:2,color:"var(--primary)",textTransform:"uppercase",marginBottom:8,fontWeight:700}}>Dégâts retenus</div>
                       {retDegats.map(id=>{const t=tarifs.find(t=>t.id===id);const dphotos=retPhotos[`degat_${id}`]||[];const q=retQtes[id]||1;return t?(<div key={id} style={{padding:"7px 0",borderBottom:"1px solid var(--border)"}}><div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span>{t.label}{retTranchesDevis[id]&&retTranchesDevis[id]!=="__LIBRE__"&&<span style={{marginLeft:6,fontSize:11,color:"var(--muted)"}}>({retTranchesDevis[id]})</span>}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span><span className="mono" style={{color:"var(--primary)",fontWeight:700}}>{t.surDevis?(retMontantsDevis[id]?`${Number(retMontantsDevis[id]).toLocaleString("fr-FR")} €`:"SUR DEVIS"):(q>1?`${q} × ${prixAvecVetuste(t.prix,vetusteTaux)} € = ${(prixAvecVetuste(t.prix,vetusteTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vetusteTaux)+" €")}</span></div>{dphotos.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>{dphotos.map((p,i)=><img key={i} src={p.url} alt="" className="photo-thumb"/>)}</div>}</div>):null;})}
                       {vetusteTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Taux de vétusté appliqué : {vetusteTaux}%</div>}
-                      {(()=>{ const nbAttente=retDegats.filter(id=>{const t=tarifs.find(t=>t.id===id);return t?.surDevis&&!retMontantsDevis[id];}).length; return (
+                      {(()=>{ const nbAttente=retDegats.filter(id=>{const t=tarifs.find(t=>t.id===id);return t?.surDevis&&t.zone==="nacelle"&&!retMontantsDevis[id];}).length; return (
                       <div>
-                        {nbAttente>0&&<div style={{marginTop:8,padding:"8px 12px",background:"#fdf3ec",border:"1px solid #e8c9a8",borderRadius:4,fontSize:13,fontWeight:600,color:"#b3541e"}}>⏳ {nbAttente} poste{nbAttente>1?"s":""} en attente de devis — le montant définitif sera communiqué après chiffrage.</div>}
+                        {nbAttente>0&&<div style={{marginTop:8,padding:"8px 12px",background:"#fdf3ec",border:"1px solid #e8c9a8",borderRadius:4,fontSize:13,fontWeight:600,color:"#b3541e"}}>⏳ Un devis atelier sera demandé pour {nbAttente} poste{nbAttente>1?"s":""} nacelle — un seul devis global, montant communiqué après chiffrage.</div>}
                         <div className="total-strip" style={{marginTop:10}}>
                           <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>{nbAttente>0?"TOTAL PROVISOIRE HT":"TOTAL RETENUE HT"}</span>
                           <span style={{fontFamily:"'Share Tech Mono'",fontSize:28,fontWeight:700}}>{totalRetenue.toLocaleString("fr-FR")} €</span>
@@ -3671,13 +3692,13 @@ export default function App() {
                     const q=activeDossier.retour?.quantites?.[id]||1;
                     return t?(<div key={id} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--border)",fontSize:13,alignItems:"center"}}>
                       <span style={{flex:1,paddingRight:16}}>{t.label}{activeDossier.retour?.tranches_devis?.[id]&&<span style={{marginLeft:6,fontSize:11,color:"var(--muted)"}}>({activeDossier.retour.tranches_devis[id]})</span>}{q>1&&<span className="mono" style={{marginLeft:6,fontSize:11,color:"var(--accent)",fontWeight:700}}>× {q}</span>}</span>
-                      <span className="mono" style={{color:"var(--primary)",fontWeight:700,whiteSpace:"nowrap"}}>{t.surDevis?((activeDossier.retour?.montants_devis?.[id])?Number(activeDossier.retour.montants_devis[id]).toLocaleString("fr-FR")+" €":"Sur devis"):(q>1?`${q} × ${prixAvecVetuste(t.prix,vTaux)} € = ${(prixAvecVetuste(t.prix,vTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vTaux)+" €")}</span>
+                      <span className="mono" style={{color:"var(--primary)",fontWeight:700,whiteSpace:"nowrap"}}>{t.surDevis?(activeDossier.devis_recu?.[id]?.inclus?"Inclus au devis":((activeDossier.retour?.montants_devis?.[id])?Number(activeDossier.retour.montants_devis[id]).toLocaleString("fr-FR")+" €":"Sur devis")):(q>1?`${q} × ${prixAvecVetuste(t.prix,vTaux)} € = ${(prixAvecVetuste(t.prix,vTaux)*q).toLocaleString("fr-FR")} €`:prixAvecVetuste(t.prix,vTaux)+" €")}</span>
                     </div>):null;
                   })}
                   {(()=>{ const vTaux=getVetuste(activeDossier.info?.annee_fab); const total=activeDossier.retour.degats.reduce((s,id)=>{const t=tarifs.find(t=>t.id===id);return s+montantPoste(t,activeDossier.retour?.quantites?.[id]||1,vTaux,activeDossier.retour?.montants_devis||{});},0); const nbAttente=activeDossier.devis_pending?.length||0; return (
                     <div>
                       {vTaux!==0&&<div style={{fontSize:11,color:"var(--muted)",marginTop:6,textAlign:"right"}}>Taux de vétusté : {vTaux}% — {activeDossier.info?.annee_fab}</div>}
-                      {nbAttente>0&&<div style={{marginTop:8,padding:"8px 12px",background:"#fdf3ec",border:"1px solid #e8c9a8",borderRadius:4,fontSize:13,fontWeight:600,color:"#b3541e"}}>⏳ {nbAttente} poste{nbAttente>1?"s":""} en attente de devis — le montant définitif sera communiqué après chiffrage.</div>}
+                      {nbAttente>0&&<div style={{marginTop:8,padding:"8px 12px",background:"#fdf3ec",border:"1px solid #e8c9a8",borderRadius:4,fontSize:13,fontWeight:600,color:"#b3541e"}}>⏳ Devis atelier en attente ({nbAttente} poste{nbAttente>1?"s":""} nacelle) — un seul devis global, montant communiqué après chiffrage.</div>}
                       <div className="total-strip" style={{marginTop:10}}>
                         <span style={{fontSize:12,letterSpacing:2,textTransform:"uppercase",fontWeight:700}}>{nbAttente>0?"TOTAL PROVISOIRE HT":"TOTAL RETENUE HT"}</span>
                         <span style={{fontFamily:"'Share Tech Mono'",fontSize:28,fontWeight:700}}>{total.toLocaleString("fr-FR")} €</span>

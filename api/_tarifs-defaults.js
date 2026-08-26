@@ -210,7 +210,10 @@ export function buildExpertiseResume(d, tarifs) {
     let description = label + (q > 1 ? " × " + q : "");
     if (surDevis) {
       montant = Number(md[id]) || Number(recu[id] && recu[id].montant) || 0;
-      if (!montant) { nbAttente++; description += " — en attente de devis"; }
+      // Poste couvert par le devis GLOBAL de l'atelier : montant porté par le
+      // premier poste du groupe, celui-ci est marqué « inclus » (pas en attente).
+      if (recu[id] && recu[id].inclus) { description += " — inclus au devis atelier" + (recu[id].reference ? " (réf. " + recu[id].reference + ")" : ""); montant = 0; }
+      else if (!montant) { nbAttente++; description += " — en attente de devis"; }
       else if (recu[id] && recu[id].reference) description += " (réf. " + recu[id].reference + ")";
     } else {
       montant = prixAvecVetuste((t && t.prix) || 0, taux) * q;
