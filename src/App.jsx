@@ -2120,10 +2120,18 @@ export default function App() {
           updated.devis_token_created = new Date().toISOString();
         }
         updated.devis_recu = foundDossier.devis_recu || {};
-      } else if (foundDossier.devis_pending?.length) {
-        // Le dossier était en attente et tout est désormais chiffré (re-validation)
+      } else if (foundDossier.devis_pending?.length || foundDossier.devis_pending_labels?.length) {
+        // Le dossier était en attente et plus aucun poste ne part en devis
+        // (re-validation : chiffrage atelier reçu, ou carrosserie passée en
+        // tranche automatique). On efface AUSSI les libellés — c'est eux que
+        // Delta VO affiche en badge et utilise pour bloquer la facturation.
         updated.devis_pending = [];
-        updated.devis_complet = true;
+        updated.devis_pending_labels = [];
+        // Étape « validation secrétaire » (envoi du rapport définitif) exigée
+        // UNIQUEMENT si un chiffrage atelier est réellement intervenu ; si
+        // l'attente a disparu par simple chiffrage automatique carrosserie,
+        // Delta VO ne doit rien demander de plus.
+        updated.devis_complet = Object.keys(foundDossier.devis_recu || {}).length > 0;
       }
     }
     // 💶 Résumé d'expertise (dégâts + montants + total retenue) stocké sur le
