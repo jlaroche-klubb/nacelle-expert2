@@ -62,27 +62,31 @@ export default async function handler(req, res) {
       const pending = Array.isArray(d.devis_pending) ? d.devis_pending : [];
       if (!pending.length) { res.status(400).json({ error: "Ce dossier n'est plus en attente de devis." }); return; }
 
-      const entries = b.montants || {}; // { tarifId: { montant, reference } }
+      // DEVIS GLOBAL (validé avec Jonathan) : quel que soit le nombre de postes,
+      // l'atelier remet UN devis — un seul montant HT + une seule référence.
+      // Le montant est porté par le premier poste du groupe ; les autres sont
+      // marqués « inclus » (0 €) pour que le total ne soit jamais doublé.
       const updates = {};
       const devisRecu = { ...(d.devis_recu || {}) };
-      let saisis = 0;
-      for (const id of pending) {
-        const e = entries[id];
-        const montant = e && Number(e.montant);
-        if (montant && montant > 0) {
-          devisRecu[id] = {
-            montant: Math.round(montant),
-            reference: String(e.reference || "").slice(0, 80),
-            date: new Date().toISOString(),
-            // Libellé mémorisé avec le chiffrage : affiché tel quel par le
-            // rapport client et par Delta VO (bandeau secrétaire)
-            label: labelOf(id),
-          };
-          updates[`retour.montants_devis.${id}`] = Math.round(montant);
-          saisis++;
-        }
-      }
-      if (!saisis) { res.status(400).json({ error: "Aucun montant saisi." }); return; }
+      const restants = pending.filter((id) => !devisRecu[id]);
+      if (!restants.length) { res.status(400).json({ error: "Ce dossier n'est plus en attente de devis." }); return; }
+      const montantGlobal = Math.round(Number(b.montant_global));
+      if (!montantGlobal || montantGlobal <= 0) { res.status(400).json({ error: "Saisissez le montant total HT du devis." }); return; }
+      const referenceGlobale = String(b.reference || "").slice(0, 80);
+      const dateSaisie = new Date().toISOString();
+      restants.forEach((id, i) => {
+        devisRecu[id] = {
+          montant: i === 0 ? montantGlobal : 0,
+          inclus: i > 0, // couvert par le montant global porté par le 1er poste
+          global: true,
+          reference: referenceGlobale,
+          date: dateSaisie,
+          // Libellé mémorisé avec le chiffrage : affiché tel quel par le
+          // rapport client et par Delta VO (bandeau secrétaire)
+          label: labelOf(id),
+        };
+        updates[`retour.montants_devis.${id}`] = i === 0 ? montantGlobal : 0;
+      });
 
       const resteEnAttente = pending.filter((id) => !devisRecu[id]);
       updates.devis_recu = devisRecu;
@@ -112,6 +116,11 @@ export default async function handler(req, res) {
     if (err) { res.status(403).send(`<html><body style="font-family:Arial;padding:40px;text-align:center;"><h2>⛔ ${esc(err)}</h2></body></html>`); return; }
 
     const pending = Array.isArray(d.devis_pending) ? d.devis_pending : [];
+    if (!pending.length) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.status(200).send(`<html><body style="font-family:Arial;padding:40px;text-align:center;"><h2 style="color:#1e7e46;">✓ Ce dossier n'est plus en attente de devis.</h2><p style="color:#666;">Le chiffrage a déjà été enregistré — merci ! Vous pouvez fermer cette page.</p></body></html>`);
+      return;
+    }
     const recu = d.devis_recu || {};
     const info = d.info || {};
     const lieu = (d.retour && d.retour.lieu_restitution) || "—";
@@ -121,21 +130,24 @@ export default async function handler(req, res) {
       return arr.map((p) => p && p.url).filter(Boolean);
     };
 
+    // UN devis global pour tous les postes : les cartes ne présentent que le
+    // constat (libellé + photos), la saisie se fait en une fois sous la liste.
     const rows = pending.map((id) => {
-      const done = recu[id];
       const photos = photosOf(id).map((u) => `<a href="${esc(u)}" target="_blank"><img src="${esc(u)}" style="width:90px;height:68px;object-fit:cover;border:1px solid #ccc;border-radius:4px;margin:2px;"></a>`).join("");
       return `
       <div style="border:1px solid #d8dbe6;border-radius:8px;padding:14px;margin-bottom:14px;background:#fff;">
         <div style="font-weight:700;color:#1a2a6e;margin-bottom:6px;">${esc(labelOf(id))}</div>
-        ${photos ? `<div style="margin-bottom:8px;">${photos}</div>` : ""}
-        ${done
-          ? `<div style="color:#1e7e46;font-weight:700;">✓ Déjà chiffré : ${done.montant.toLocaleString("fr-FR")} € HT${done.reference ? " · réf. " + esc(done.reference) : ""}</div>`
-          : `<div style="display:flex;gap:10px;flex-wrap:wrap;">
-              <label style="font-size:13px;">Montant € HT *<br><input type="number" min="1" step="1" name="montant_${esc(id)}" style="width:130px;padding:8px;border:1px solid #ccd;border-radius:4px;font-size:15px;"></label>
-              <label style="font-size:13px;">Référence du devis<br><input type="text" name="reference_${esc(id)}" placeholder="DEV-2026-..." style="width:180px;padding:8px;border:1px solid #ccd;border-radius:4px;font-size:15px;"></label>
-            </div>`}
+        ${photos ? `<div>${photos}</div>` : ""}
       </div>`;
     }).join("");
+    const saisieGlobale = `
+      <div style="border:2px solid #1a2a6e;border-radius:8px;padding:16px;margin-bottom:14px;background:#f4f6ff;">
+        <div style="font-weight:700;color:#1a2a6e;margin-bottom:10px;">💶 Votre devis — un seul montant pour l'ensemble des ${pending.length} poste${pending.length > 1 ? "s" : ""} ci-dessus</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;">
+          <label style="font-size:13px;">Montant total € HT *<br><input type="number" min="1" step="1" name="montant_global" style="width:150px;padding:8px;border:1px solid #ccd;border-radius:4px;font-size:16px;font-weight:700;"></label>
+          <label style="font-size:13px;">Référence du devis<br><input type="text" name="reference_global" placeholder="DEV-2026-..." style="width:190px;padding:8px;border:1px solid #ccd;border-radius:4px;font-size:15px;"></label>
+        </div>
+      </div>`;
 
     const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><title>Devis · Nacelle ${esc(immat)}</title></head>
@@ -152,8 +164,8 @@ export default async function handler(req, res) {
       <tr><td style="color:#888;padding:3px 14px 3px 0;">Expert</td><td><b>${esc(expert)}</b></td></tr>
       <tr><td style="color:#888;padding:3px 14px 3px 0;">Client</td><td>${esc(info.client || "—")} (contrat ${esc(info.contrat || "—")})</td></tr>
     </table>
-    <p style="font-size:13px;color:#666;">Saisissez le montant HT de remise en état pour chaque poste ci-dessous, puis validez. Les montants seront intégrés à l'expertise et transmis pour validation.</p>
-    <form id="f">${rows}
+    <p style="font-size:13px;color:#666;">Établissez UN devis de remise en état couvrant l'ensemble des postes ci-dessous, puis saisissez son montant total HT et sa référence. Le montant sera intégré à l'expertise et transmis pour validation.</p>
+    <form id="f">${rows}${saisieGlobale}
       <button type="submit" style="background:#1a2a6e;color:#fff;border:none;padding:12px 28px;border-radius:6px;font-size:16px;font-weight:700;cursor:pointer;">✓ Enregistrer le devis</button>
       <div id="msg" style="margin-top:12px;font-weight:700;"></div>
     </form>
@@ -164,28 +176,21 @@ export default async function handler(req, res) {
 document.getElementById("f").addEventListener("submit", async (e) => {
   e.preventDefault();
   const msg = document.getElementById("msg");
-  const montants = {};
-  ${JSON.stringify(pending.filter((id) => !recu[id]))}.forEach((id) => {
-    const m = document.querySelector('[name="montant_' + id + '"]');
-    const r = document.querySelector('[name="reference_' + id + '"]');
-    if (m && m.value) montants[id] = { montant: Number(m.value), reference: r ? r.value : "" };
-  });
-  if (!Object.keys(montants).length) { msg.style.color = "#c0392b"; msg.textContent = "Saisissez au moins un montant."; return; }
+  const m = document.querySelector('[name="montant_global"]');
+  const r = document.querySelector('[name="reference_global"]');
+  if (!m || !m.value || Number(m.value) <= 0) { msg.style.color = "#c0392b"; msg.textContent = "Saisissez le montant total HT du devis."; return; }
   msg.style.color = "#666"; msg.textContent = "⏳ Enregistrement...";
   try {
     const resp = await fetch(location.pathname, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cle: ${JSON.stringify(cle)}, montants }),
+      body: JSON.stringify({ cle: ${JSON.stringify(cle)}, montant_global: Number(m.value), reference: r ? r.value : "" }),
     });
     const j = await resp.json();
     if (!resp.ok) throw new Error(j.error || resp.status);
     msg.style.color = "#1e7e46";
-    msg.textContent = j.complet
-      ? "✓ Devis complet enregistré — merci ! L'équipe Delta Services prend le relais. Vous pouvez fermer cette page."
-      : "✓ Enregistré. Il reste " + j.restants + " poste(s) à chiffrer (ce lien reste valable).";
-    if (j.complet) document.querySelectorAll("#f input,#f button").forEach((el) => el.disabled = true);
-    else setTimeout(() => location.reload(), 1500);
+    msg.textContent = "✓ Devis enregistré — merci ! L'équipe Delta Services prend le relais. Vous pouvez fermer cette page.";
+    document.querySelectorAll("#f input,#f button").forEach((el) => el.disabled = true);
   } catch (err) {
     msg.style.color = "#c0392b"; msg.textContent = "⚠ Échec : " + err.message;
   }

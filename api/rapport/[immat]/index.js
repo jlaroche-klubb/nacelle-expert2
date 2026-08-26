@@ -104,7 +104,12 @@ export default async function handler(req, res) {
       let montantHtml;
       if (surDevis) {
         const m = Number(md[id]) || Number(recu[id] && recu[id].montant) || 0;
-        if (m > 0) {
+        if (recu[id] && recu[id].inclus) {
+          // Devis GLOBAL de l'atelier : le montant est porté par le premier
+          // poste du groupe, celui-ci est couvert par le même devis.
+          const ref = recu[id].reference ? ` <span style="color:#888;font-weight:400;">· réf. ${esc(recu[id].reference)}</span>` : "";
+          montantHtml = `<span style="color:#1a2a6e;font-weight:700;">Inclus au devis</span>${ref}`;
+        } else if (m > 0) {
           total += m;
           const ref = recu[id] && recu[id].reference ? ` <span style="color:#888;font-weight:400;">· réf. ${esc(recu[id].reference)}</span>` : "";
           montantHtml = `<b>${eur(m)} €</b>${ref}`;
@@ -155,7 +160,7 @@ export default async function handler(req, res) {
       ? `<table style="width:100%;border-collapse:collapse;font-size:14px;">${rows}</table>`
       : `<p style="color:#208040;font-weight:600;">✓ Aucun dégât — nacelle rendue conforme</p>`}
     ${taux !== 0 ? `<div style="font-size:12px;color:#888;margin-top:8px;">Taux de vétusté appliqué : ${taux}% (hors postes sur devis)</div>` : ""}
-    ${!definitif ? `<div style="margin-top:10px;padding:10px 14px;background:#fdf3ec;border:1px solid #e8c9a8;border-radius:6px;font-size:13px;font-weight:600;color:#b3541e;">⏳ ${nbAttente} poste${nbAttente > 1 ? "s" : ""} en attente de devis — le montant définitif sera communiqué après chiffrage.</div>` : ""}
+    ${!definitif ? `<div style="margin-top:10px;padding:10px 14px;background:#fdf3ec;border:1px solid #e8c9a8;border-radius:6px;font-size:13px;font-weight:600;color:#b3541e;">⏳ Devis atelier en attente (${nbAttente} poste${nbAttente > 1 ? "s" : ""}) — un seul devis global, le montant définitif sera communiqué après chiffrage.</div>` : ""}
 
     <div style="display:flex;justify-content:space-between;align-items:center;background:#1a2a6e;color:#fff;padding:12px 18px;margin-top:14px;border-radius:4px;">
       <span style="font-size:12px;letter-spacing:2px;font-weight:700;">${definitif ? "TOTAL RETENUE HT" : "TOTAL PROVISOIRE HT"}</span>

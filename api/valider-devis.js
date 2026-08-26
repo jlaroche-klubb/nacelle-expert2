@@ -81,7 +81,7 @@ export default async function handler(req, res) {
     const d = snap.data();
 
     if (d.devis_pending?.length) {
-      res.status(400).json({ error: `Devis incomplet : ${d.devis_pending.length} poste(s) restent à chiffrer par l'atelier.` });
+      res.status(400).json({ error: "Le devis atelier n'a pas encore été reçu pour ce dossier." });
       return;
     }
     if (!d.devis_complet) {
