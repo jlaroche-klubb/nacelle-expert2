@@ -62,8 +62,8 @@ export default async function handler(req, res) {
     // Rôle contrôlé dans la collection users de Delta VO
     const userSnap = await dvApp.firestore().collection("users").doc(decoded.uid).get();
     const role = userSnap.exists ? userSnap.data().role : null;
-    if (!["admin", "secretaire"].includes(role)) {
-      res.status(403).json({ error: "Réservé aux profils Secrétaire/ADV et Administrateur" });
+    if (!["superadmin", "admin", "secretaire"].includes(role)) {
+      res.status(403).json({ error: "Réservé aux profils Secrétaire/ADV, Administrateur et Super admin" });
       return;
     }
     const validePar = userSnap.exists
