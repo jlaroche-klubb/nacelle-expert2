@@ -680,7 +680,18 @@ async function compressPhotos(photos) {
   return result;
 }
 async function fbSaveDossier(data) {
-  try { const c={...data}; if(c.depart?.photos) c.depart={...c.depart,photos:await compressPhotos(c.depart.photos)}; if(c.retour?.photos) c.retour={...c.retour,photos:await compressPhotos(c.retour.photos)}; await setDoc(doc(db,"dossiers",c.immat),c); }
+  try {
+    const c={...data};
+    // 🛡 Immatriculation TOUJOURS nettoyée avant écriture (espaces, minuscules) :
+    // un « HD-535-CS » avec un espace final créait un dossier introuvable pour
+    // les photos de ventes, la synchro Delta VO et les recherches (cas réel).
+    const immatPropre = normalizeImmat(String(c.immat||"").trim()).trim();
+    if (immatPropre && immatPropre !== c.immat) {
+      console.warn(`🧹 Immat nettoyée à l'enregistrement : "${c.immat}" → "${immatPropre}"`);
+      c.immat = immatPropre;
+      if (c.info) c.info = { ...c.info, immat: immatPropre };
+    }
+    if(c.depart?.photos) c.depart={...c.depart,photos:await compressPhotos(c.depart.photos)}; if(c.retour?.photos) c.retour={...c.retour,photos:await compressPhotos(c.retour.photos)}; await setDoc(doc(db,"dossiers",c.immat),c); }
   catch(e) { console.error(e); alert("Erreur de sauvegarde : "+e.message); }
 }
 async function fbSaveConfig(id,data) { await setDoc(doc(db,"config",id),data); }
