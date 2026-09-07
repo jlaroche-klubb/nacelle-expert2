@@ -1962,7 +1962,10 @@ export default function App() {
     const previous = dossiers[depForm.immat] || await fetchDossier(depForm.immat);
     if (previous?.retour) {
       const archiveId = `${previous.immat}__ARCH__${Date.now()}`;
-      const archivedDoc = { ...previous, archived: true, archiveId, archivedAt: new Date().toISOString() };
+      // 🛡 La copie d'archive ne doit JAMAIS être resynchronisée vers Delta VO
+      // (sinon l'ancien retour serait rejoué APRÈS le nouveau départ et la
+      // machine qui vient de partir repasserait en vente).
+      const archivedDoc = { ...previous, archived: true, archiveId, archivedAt: new Date().toISOString(), synced_to_delta_vo: true };
       try {
         await setDoc(doc(db, "dossiers", archiveId), archivedDoc);
         setDossiers(prev => ({ ...prev, [archiveId]: archivedDoc }));
@@ -2131,6 +2134,10 @@ export default function App() {
           updated.devis_token_created = new Date().toISOString();
         }
         updated.devis_recu = foundDossier.devis_recu || {};
+        // 🔁 Nouveaux postes en attente : la validation secrétaire du cycle de
+        // devis précédent ne vaut plus — Delta VO redemandera « Valider le devis »
+        // une fois le nouveau chiffrage atelier reçu.
+        updated.devis_valide = null;
       } else if (foundDossier.devis_pending?.length || foundDossier.devis_pending_labels?.length) {
         // Le dossier était en attente et plus aucun poste ne part en devis
         // (re-validation : chiffrage atelier reçu, ou carrosserie passée en
@@ -2391,7 +2398,9 @@ export default function App() {
             ...(activeDossier.retour||{}),
             commercialPhotos: { ...(activeDossier.retour?.commercialPhotos||{}), [slot.key]: { url, type:"storage" } }
           },
-          synced_to_delta_vo: false,
+          // ℹ️ PAS de resynchro Delta VO pour une simple photo de ventes : Delta VO
+          // lit déjà photos_ventes/{IMMAT}, et une resynchro remettait la machine
+          // en restitution (facturation effacée) — cas réel constaté.
           updatedAt: new Date().toISOString()
         };
         await fbSaveDossier(updated);
