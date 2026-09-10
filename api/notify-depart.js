@@ -13,6 +13,7 @@
 //   FIREBASE_SERVICE_ACCOUNT, BREVO_API_KEY, BREVO_SENDER_EMAIL, BREVO_SENDER_NAME
 
 import admin from "firebase-admin";
+import { exigerRole, cleRapport, lienRapport } from "./_auth-role.js";
 
 export const maxDuration = 60; // redressement serveur des photos (jusqu'à ~40 s)
 
@@ -44,13 +45,9 @@ export default async function handler(req, res) {
   }
   try {
     // Sécurité : l'appel doit venir d'un utilisateur authentifié de l'app
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    if (!token) {
-      res.status(401).json({ error: "Non authentifié" });
-      return;
-    }
-    await admin.auth().verifyIdToken(token);
+    // 🔐 Jeton + rôle (expert / admin / super admin) — un compte « en attente » ne peut pas envoyer d'email
+    const user = await exigerRole(admin, req, res);
+    if (!user) return;
 
     const b = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
     if (!b.immat) {
@@ -72,7 +69,19 @@ export default async function handler(req, res) {
     const senderName = process.env.BREVO_SENDER_NAME || "Delta Services";
 
     const esc = (s) => String(s ?? "—").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
-    const lien = `${APP_URL}/api/rapport/${encodeURIComponent(b.immat)}/depart`;
+    // 🔑 Clé d'accès de l'état de départ (rapports_links.depart_token, créée si absente)
+    let cleDep = "";
+    try {
+      const rlRef = admin.firestore().collection("rapports_links").doc(String(b.immat).toUpperCase().trim());
+      const rl = await rlRef.get();
+      cleDep = rl.exists ? (rl.data().depart_token || "") : "";
+      if (!cleDep) {
+        const { randomBytes } = await import("crypto");
+        cleDep = randomBytes(24).toString("hex");
+        await rlRef.set({ depart_token: cleDep }, { merge: true });
+      }
+    } catch (e) { console.warn("clé état de départ :", e); }
+    const lien = `${APP_URL}/api/rapport/${encodeURIComponent(b.immat)}/depart?cle=${encodeURIComponent(cleDep)}`;
 
     const html =
       `<div style="font-family:Arial,sans-serif;max-width:560px;">` +

@@ -10,6 +10,8 @@
 //   BREVO_SENDER_NAME         (optionnel) nom d'affichage — défaut "Nacelle Expert · Delta Services"
 
 import admin from "firebase-admin";
+import { exigerRole, cleRapport, lienRapport } from "./_auth-role.js";
+const APP_URL = "https://nacelle-expert2.vercel.app";
 
 export const maxDuration = 60; // redressement serveur des photos (jusqu'à ~40 s)
 
@@ -44,15 +46,15 @@ export default async function handler(req, res) {
   }
   try {
     // Sécurité : l'appel doit venir d'un utilisateur authentifié de l'app
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    if (!token) {
-      res.status(401).json({ error: "Non authentifié" });
-      return;
-    }
-    await admin.auth().verifyIdToken(token);
+    // 🔐 Jeton + rôle (expert / admin / super admin) — un compte « en attente » ne peut pas envoyer d'email
+    const user = await exigerRole(admin, req, res);
+    if (!user) return;
 
     const b = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
+    // 🔑 Lien du rapport construit CÔTÉ SERVEUR avec la clé d'accès du dossier
+    // (le lien envoyé par le navigateur n'est plus utilisé)
+    let lien = "";
+    try { const r = await cleRapport(admin, b.immat); lien = r.dossier ? lienRapport(APP_URL, b.immat, r.cle) : ""; } catch (e) { console.warn("clé rapport :", e); }
     if (!b.immat) {
       res.status(400).json({ error: "Immatriculation manquante" });
       return;
@@ -85,8 +87,8 @@ export default async function handler(req, res) {
       row("Dégâts constatés", esc(b.nb_degats), true) +
       row("Total retenue", `<b style="color:#c8102e;">${esc(b.total_retenue)}</b>`) +
       `</table>` +
-      (b.lien_rapport
-        ? `<p style="margin-top:18px;"><a href="${esc(b.lien_rapport)}" style="background:#1a2a6e;color:#fff;padding:10px 22px;text-decoration:none;font-weight:bold;">&#128196; Voir le rapport complet</a></p>`
+      (lien
+        ? `<p style="margin-top:18px;"><a href="${esc(lien)}" style="background:#1a2a6e;color:#fff;padding:10px 22px;text-decoration:none;font-weight:bold;">&#128196; Voir le rapport complet</a></p>`
         : "") +
       `<p style="color:#999;font-size:12px;margin-top:18px;">Email automatique envoyé à la validation de l'expertise dans Nacelle Expert.</p>` +
       `</div>`;

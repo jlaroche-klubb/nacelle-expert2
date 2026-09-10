@@ -11,6 +11,7 @@
 // PRÉREQUIS Vercel : FIREBASE_SERVICE_ACCOUNT, BREVO_API_KEY, BREVO_SENDER_EMAIL.
 
 import admin from "firebase-admin";
+import { exigerRole, cleRapport, lienRapport } from "./_auth-role.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -24,14 +25,16 @@ const APP_URL = "https://nacelle-expert2.vercel.app";
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Méthode non autorisée" }); return; }
   try {
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    if (!token) { res.status(401).json({ error: "Non authentifié" }); return; }
-    await admin.auth().verifyIdToken(token);
+    // 🔐 Jeton + rôle (expert / admin / super admin) — un compte « en attente » ne peut pas envoyer d'email
+    const user = await exigerRole(admin, req, res);
+    if (!user) return;
 
     const b = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
     if (!b.immat) { res.status(400).json({ error: "Immatriculation manquante" }); return; }
-    const clientEmail = (b.email_client || "").trim();
+    // 📧 Email client relu dans le DOSSIER (Firestore), pas dans le corps de la requête
+    const { cle, dossier } = await cleRapport(admin, b.immat);
+    if (!dossier) { res.status(404).json({ error: "Dossier introuvable" }); return; }
+    const clientEmail = String(dossier.info?.email || b.email_client || "").trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clientEmail)) {
       res.status(400).json({ error: "Email client manquant ou invalide" });
       return;
@@ -51,7 +54,7 @@ export default async function handler(req, res) {
     } catch { /* défaut conservé */ }
 
     const esc = (s) => String(s ?? "—").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
-    const lien = `${APP_URL}/api/rapport/${encodeURIComponent(b.immat)}`;
+    const lien = lienRapport(APP_URL, b.immat, cle);
     const provisoire = !!b.provisoire;
     const nb = Number(b.nb_attente) || 0;
 
