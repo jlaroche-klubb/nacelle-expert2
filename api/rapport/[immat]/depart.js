@@ -24,6 +24,14 @@ export default async function handler(req, res) {
 
     const snap = await admin.firestore().collection("rapports_links").doc(immat).get();
     const url = snap.exists ? snap.data().depart_url || null : null;
+    // 🔐 Clé d'accès (depart_token, posée à la publication depuis l'appli)
+    const attendu = snap.exists ? snap.data().depart_token || "" : "";
+    const cle = String(req.query.cle || "").trim();
+    if (!attendu || !cle || cle !== attendu) {
+      res.setHeader("Cache-Control", "no-store");
+      res.status(403).send("Lien invalide ou expiré. Utilisez le lien reçu dans l'email « État de départ », ou demandez un nouvel envoi à Delta Services.");
+      return;
+    }
 
     if (!url) {
       res.status(404).send("État de départ non disponible pour " + immat + ". Ouvrez le récap départ dans l'application et cliquez sur Email pour le publier.");

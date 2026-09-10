@@ -18,6 +18,7 @@
 //   BREVO_API_KEY, BREVO_SENDER_EMAIL  (déjà en place)
 
 import admin from "firebase-admin";
+import { cleRapport, lienRapport } from "./_auth-role.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -104,7 +105,10 @@ export default async function handler(req, res) {
         } catch { /* défaut */ }
 
         const esc = (s) => String(s ?? "—").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
-        const lien = `${APP_URL}/api/rapport/${encodeURIComponent(immat)}`;
+        // 🔑 Lien avec la clé d'accès du rapport (créée si absente)
+        let cleR = "";
+        try { cleR = (await cleRapport(admin, immat)).cle; } catch (e) { console.warn("clé rapport :", e); }
+        const lien = lienRapport(APP_URL, immat, cleR);
         const html =
           `<div style="font-family:Arial,sans-serif;max-width:560px;">` +
           `<h2 style="color:#1a2a6e;margin-bottom:4px;">Rapport de restitution définitif · Nacelle ${esc(immat)}</h2>` +

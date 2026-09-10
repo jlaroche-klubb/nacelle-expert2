@@ -6,9 +6,22 @@ import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import html2pdf from "html2pdf.js";
 import { DEFAULT_TARIFS, buildExpertiseResume } from "../api/_tarifs-defaults.js";
 
-const ADMIN_PASSWORD = "nacelle2024";
+// 🔐 Accès Admin : par le RÔLE (admin / super admin) — plus de mot de passe dans le code
 const EMAIL_CC = "assistanat.commerce@delta-services.fr";
-const REMOVE_BG_KEY = "EwW4qNTWQbKeGVs1GaQkiX3W";
+// 🔐 Détourage remove.bg : la clé n'est plus dans le navigateur. Les appels passent
+// par la fonction serveur de Delta VO (/api/removebg), qui exige le jeton Firebase
+// de l'utilisateur connecté (les jetons Nacelle Expert sont acceptés).
+const DELTA_VO_API = "https://delta-vo.vercel.app/api";
+async function enTetesAuth(json = true) {
+  const token = await auth.currentUser?.getIdToken();
+  return { ...(json ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+}
+// 🔑 Clé d'accès d'un rapport : générée une fois par dossier, exigée par /api/rapport
+function genererCleRapport() {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+}
 const APP_URL = "https://nacelle-expert2.vercel.app"; // production — utilisé pour les liens courts /api/rapport
 const PAGE_DOSSIERS = 60; // pagination : nombre de dossiers chargés par page (accueil + « Voir plus »)
 
@@ -93,7 +106,7 @@ async function notifyRapportExpertise(dossier, tarifs, isUpdate) {
         nb_degats: String((dossier.retour?.degats || []).length),
         total_retenue: total.toLocaleString("fr-FR") + " € HT" + (surDevis ? " (+ postes sur devis)" : ""),
         type_envoi: isUpdate ? "Rapport d'expertise mis à jour" : "Nouvelle expertise retour",
-        lien_rapport: `${APP_URL}/api/rapport/${dossier.immat}`,
+        lien_rapport: `${APP_URL}/api/rapport/${dossier.immat}${dossier.rapport_token ? `?cle=${encodeURIComponent(dossier.rapport_token)}` : ""}`,
       }),
     });
     if (!resp.ok) {
@@ -260,9 +273,26 @@ async function openEmailClient(emailTo, immat, reportType = "depart", dossier = 
   const subject = isDepart
     ? `État de départ · Nacelle ${immat}`
     : `Rapport de restitution · Nacelle ${immat}`;
+  // 🔑 Clé d'accès : rapport retour → rapport_token du dossier (créée si absente,
+  // anciens dossiers) ; état de départ → depart_token dans rapports_links
+  let cle = "";
+  try {
+    if (isDepart) {
+      const rlSnap = await getDoc(doc(db, "rapports_links", immat));
+      cle = rlSnap.exists() ? (rlSnap.data().depart_token || "") : "";
+      if (!cle) { cle = genererCleRapport(); await setDoc(doc(db, "rapports_links", immat), { depart_token: cle }, { merge: true }); }
+    } else {
+      cle = dossier?.rapport_token || "";
+      if (!cle) {
+        const dSnap = await getDoc(doc(db, "dossiers", immat));
+        cle = dSnap.exists() ? (dSnap.data().rapport_token || "") : "";
+        if (!cle) { cle = genererCleRapport(); await updateDoc(doc(db, "dossiers", immat), { rapport_token: cle, rapport_token_created: new Date().toISOString() }); }
+      }
+    }
+  } catch (e) { console.warn("Clé rapport :", e); }
   const shortLink = isDepart
-    ? `${APP_URL}/api/rapport/${immat}/depart`
-    : `${APP_URL}/api/rapport/${immat}`;
+    ? `${APP_URL}/api/rapport/${immat}/depart?cle=${encodeURIComponent(cle)}`
+    : `${APP_URL}/api/rapport/${immat}?cle=${encodeURIComponent(cle)}`;
 
   try {
     if (isDepart) {
@@ -534,14 +564,15 @@ async function removeBackground(base64) {
     form.append("type", "auto");
     form.append("shadow_type", "drop"); // ombre portée (options: drop, car, 3D, none)
     form.append("shadow_opacity", "55");
-    const resp = await fetch("https://api.remove.bg/v1.0/removebg", {
+    void form; // (l'appel direct remove.bg est remplacé par le serveur Delta VO)
+    const resp = await fetch(`${DELTA_VO_API}/removebg`, {
       method: "POST",
-      headers: { "X-Api-Key": REMOVE_BG_KEY },
-      body: form
+      headers: await enTetesAuth(),
+      body: JSON.stringify({ imageBase64: String(base64).replace(/^data:[^,]+,/, ""), size: "4k" })
     });
     if (!resp.ok) throw new Error("Remove.bg erreur " + resp.status);
-    const outBlob = await resp.blob();
-    return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(outBlob); });
+    const out = await resp.json();
+    return out?.imageBase64 ? "data:image/png;base64," + out.imageBase64 : null;
   } catch(e) { console.error("Remove.bg:", e); return null; }
 }
 
@@ -555,14 +586,15 @@ async function removeBackgroundFromUrl(imageUrl) {
     form.append("type", "auto"); // profil « auto » (voir plus haut)
     form.append("shadow_type", "drop");
     form.append("shadow_opacity", "55");
-    const resp = await fetch("https://api.remove.bg/v1.0/removebg", {
+    void form;
+    const resp = await fetch(`${DELTA_VO_API}/removebg`, {
       method: "POST",
-      headers: { "X-Api-Key": REMOVE_BG_KEY },
-      body: form
+      headers: await enTetesAuth(),
+      body: JSON.stringify({ imageUrl, size: "4k" })
     });
     if (!resp.ok) throw new Error("Remove.bg erreur " + resp.status);
-    const outBlob = await resp.blob();
-    return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(outBlob); });
+    const out = await resp.json();
+    return out?.imageBase64 ? "data:image/png;base64," + out.imageBase64 : null;
   } catch(e) { console.error("Remove.bg (url):", e); return null; }
 }
 
@@ -692,7 +724,14 @@ async function fbSaveDossier(data) {
       if (c.info) c.info = { ...c.info, immat: immatPropre };
     }
     if(c.depart?.photos) c.depart={...c.depart,photos:await compressPhotos(c.depart.photos)}; if(c.retour?.photos) c.retour={...c.retour,photos:await compressPhotos(c.retour.photos)}; await setDoc(doc(db,"dossiers",c.immat),c); }
-  catch(e) { console.error(e); alert("Erreur de sauvegarde : "+e.message); }
+  catch(e) {
+    // ❌ Sauvegarde échouée (réseau, règles, document trop lourd) : on PRÉVIENT
+    // ET on REMONTE l'erreur — l'appelant ne doit ni effacer le brouillon ni
+    // envoyer d'email vers un rapport qui n'existe pas (règle Jonathan).
+    console.error(e);
+    alert("❌ Sauvegarde impossible : " + e.message + "\n\nVotre saisie est conservée en brouillon. Vérifiez la connexion puis validez à nouveau.");
+    throw e;
+  }
 }
 async function fbSaveConfig(id,data) { await setDoc(doc(db,"config",id),data); }
 async function fbGetConfig(id) { const snap=await getDocs(collection(db,"config")); const found=snap.docs.find(d=>d.id===id); return found?found.data():null; }
@@ -977,9 +1016,7 @@ export default function App() {
   const [regenPreview,setRegenPreview]=useState({});  // { [angleKey]: base64 } aperçu avant remplacement
   const [venteBusy,setVenteBusy]=useState(null);      // slot photo de ventes en cours de traitement
   const [adminOpen,setAdminOpen]=useState(false);
-  const [adminAuthed,setAdminAuthed]=useState(false);
-  const [adminPwd,setAdminPwd]=useState("");
-  const [adminPwdErr,setAdminPwdErr]=useState(false);
+  const [adminAuthed,setAdminAuthed]=useState(false); // déverrouillé automatiquement par le rôle (voir plus bas)
   const [adminTab,setAdminTab]=useState("zones");
   const [adminMsg,setAdminMsg]=useState("");
   const [zoneForm,setZoneForm]=useState({label:"",icon:"⟋"});
@@ -1580,9 +1617,7 @@ export default function App() {
       if (thumb) {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 8000);
-        const resp = await fetch("https://delta-vo.vercel.app/api/photo-orientation", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const resp = await fetch("https://delta-vo.vercel.app/api/photo-orientation", { method: "POST", headers: await enTetesAuth(),
           body: JSON.stringify({ imageBase64: thumb }),
           signal: ctrl.signal,
         });
@@ -1773,7 +1808,7 @@ export default function App() {
       try {
         const thumb=await miniatureDepuisUrl(url);
         const ctrl=new AbortController(); const tid=setTimeout(()=>ctrl.abort(),15000);
-        const resp=await fetch("https://delta-vo.vercel.app/api/photo-orientation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({imageBase64:thumb,ctx:`bouton rapport ${activeDossier.immat||""}`}),signal:ctrl.signal});
+        const resp=await fetch("https://delta-vo.vercel.app/api/photo-orientation", { method: "POST", headers: await enTetesAuth(),body:JSON.stringify({imageBase64:thumb,ctx:`bouton rapport ${activeDossier.immat||""}`}),signal:ctrl.signal});
         clearTimeout(tid);
         const j=await resp.json().catch(()=>null);
         const rot=Number(j?.rotation)||0;
@@ -1949,7 +1984,8 @@ export default function App() {
     }
     const pending=(depPhotos["a_trier"]||[]).length;
     if(pending&&!window.confirm(`${pending} photo${pending>1?"s":""} du bac d'import n'${pending>1?"ont":"a"} pas été affectée${pending>1?"s":""} et ser${pending>1?"ont":"a"} abandonnée${pending>1?"s":""}.\n\nValider quand même ?`)) return;
-    await saveDepart();
+    const ok = await saveDepart();
+    if (!ok) return; // sauvegarde refusée : on reste sur l'écran, brouillon intact
     clearDraft("depart");
     goHome();
   }
@@ -2014,7 +2050,8 @@ export default function App() {
       createdBy: currentUser?.uid || null,
       createdByName: userProfile ? `${userProfile.prenom} ${userProfile.nom}` : depForm.agent
     };
-    await fbSaveDossier(data); setDossiers(prev=>({...prev,[data.immat]:data})); return data;
+    try { await fbSaveDossier(data); } catch { return null; } // brouillon conservé
+    setDossiers(prev=>({...prev,[data.immat]:data})); return data;
   }
   async function saveRetour() {
     if(!foundDossier) return;
@@ -2156,8 +2193,10 @@ export default function App() {
     // dossier : copié tel quel par Delta VO (secrétaires/commerciaux) et
     // recalculé à chaque chiffrage atelier (api/devis).
     updated.expertise_resume = buildExpertiseResume(updated, tarifs);
+    // 🔑 Clé d'accès du rapport (exigée par /api/rapport) — conservée si déjà émise
+    if (!updated.rapport_token) { updated.rapport_token = genererCleRapport(); updated.rapport_token_created = new Date().toISOString(); }
     delete updated._renamedFrom; // champ de travail : ne pas persister
-    await fbSaveDossier(updated);
+    try { await fbSaveDossier(updated); } catch { return null; } // brouillon conservé, aucun email
     if (isRenamed) {
       try { await deleteDoc(doc(db, "dossiers", renamedFrom)); console.log("🔤 Immat corrigée :", renamedFrom, "→", updated.immat); }
       catch(e) { console.error("Suppression ancien dossier:", e); }
@@ -2327,9 +2366,7 @@ export default function App() {
       const thumb = await compressBase64(base64, 384, 0.6);
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), 8000);
-      const resp = await fetch("https://delta-vo.vercel.app/api/photo-orientation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const resp = await fetch("https://delta-vo.vercel.app/api/photo-orientation", { method: "POST", headers: await enTetesAuth(),
         body: JSON.stringify({ imageBase64: thumb }),
         signal: ctl.signal
       });
@@ -3848,15 +3885,12 @@ export default function App() {
       {adminOpen&&(
         <div className="modal-overlay" onClick={e=>{if(e.target===e.currentTarget){setAdminOpen(false);setAdminAuthed(false);}}}>
           <div className="modal">
-            {!adminAuthed?(
+            {!(adminAuthed || isSuperAdmin || userProfile?.role==="admin")?(
               <div>
                 <div style={{fontFamily:"'Share Tech Mono'",fontSize:16,color:"var(--primary)",letterSpacing:3,marginBottom:20}}>ACCÈS ADMIN</div>
-                <label>Mot de passe</label>
-                <input type="password" value={adminPwd} onChange={e=>{setAdminPwd(e.target.value);setAdminPwdErr(false);}} onKeyDown={e=>e.key==="Enter"&&(adminPwd===ADMIN_PASSWORD?(setAdminAuthed(true),setAdminPwd("")):setAdminPwdErr(true))} placeholder="••••••••" autoFocus style={{marginBottom:8}}/>
-                {adminPwdErr&&<div style={{color:"var(--accent)",fontSize:12,marginBottom:8}}>Mot de passe incorrect</div>}
-                <div style={{display:"flex",justifyContent:"space-between",marginTop:14}}>
-                  <button className="btn btn-outline btn-sm" onClick={()=>setAdminOpen(false)}>Annuler</button>
-                  <button className="btn btn-gold btn-sm" onClick={()=>adminPwd===ADMIN_PASSWORD?(setAdminAuthed(true),setAdminPwd("")):setAdminPwdErr(true)}>Accéder →</button>
+                <p style={{fontSize:13,color:"var(--muted)"}}>🔒 Cet espace est réservé aux administrateurs. Votre compte ({currentUser?.email||"—"}) a le rôle « {userProfile?.role||"—"} ».<br/>Demandez à un administrateur de modifier votre rôle si nécessaire.</p>
+                <div style={{display:"flex",justifyContent:"flex-end",marginTop:14}}>
+                  <button className="btn btn-outline btn-sm" onClick={()=>setAdminOpen(false)}>Fermer</button>
                 </div>
               </div>
             ):(

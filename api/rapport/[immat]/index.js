@@ -42,10 +42,22 @@ export default async function handler(req, res) {
     const db = admin.firestore();
     const snap = await db.collection("dossiers").doc(immat).get();
     if (!snap.exists) {
-      res.status(404).send("Dossier introuvable : " + immat);
+      res.status(403).send("Lien invalide ou expiré. Utilisez le lien reçu dans l'email « Rapport de restitution », ou demandez un nouvel envoi à Delta Services.");
       return;
     }
     const d = snap.data();
+
+    // 🔐 CLÉ D'ACCÈS OBLIGATOIRE (validé avec Jonathan, 10/09/2026) : un rapport
+    // contient client, contrat, montants, photos, PDF signé — il ne doit pas être
+    // lisible par simple immatriculation. Même message pour « clé absente/fausse »
+    // et « pas de clé sur le dossier » (pas d'énumération possible).
+    const cle = String(req.query.cle || "").trim();
+    if (!d.rapport_token || !cle || cle !== d.rapport_token) {
+      res.setHeader("Cache-Control", "no-store");
+      res.status(403).send("Lien invalide ou expiré. Utilisez le lien reçu dans l'email « Rapport de restitution », ou demandez un nouvel envoi à Delta Services.");
+      return;
+    }
+
     const pdfUrl = (d.retour && d.retour.pdf_url) || d.rapport_url || null;
 
     // Dossier concerné par le workflow devis ? (postes en attente, chiffrés,

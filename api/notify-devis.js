@@ -11,6 +11,7 @@
 // PRÉREQUIS Vercel : FIREBASE_SERVICE_ACCOUNT, BREVO_API_KEY, BREVO_SENDER_EMAIL.
 
 import admin from "firebase-admin";
+import { exigerRole, cleRapport, lienRapport } from "./_auth-role.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -31,10 +32,9 @@ async function getEmailConfig() {
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Méthode non autorisée" }); return; }
   try {
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    if (!token) { res.status(401).json({ error: "Non authentifié" }); return; }
-    await admin.auth().verifyIdToken(token);
+    // 🔐 Jeton + rôle (expert / admin / super admin) — un compte « en attente » ne peut pas envoyer d'email
+    const user = await exigerRole(admin, req, res);
+    if (!user) return;
 
     const b = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
     if (!b.immat || !b.cle) { res.status(400).json({ error: "immat / cle manquants" }); return; }
