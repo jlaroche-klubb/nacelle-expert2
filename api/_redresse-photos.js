@@ -19,32 +19,7 @@ import crypto from "crypto";
 const BUCKET = "nacelle-expert.firebasestorage.app";
 const ORIENTATION_API = "https://delta-vo.vercel.app/api/photo-orientation";
 
-// 🔐 Depuis le lot sécurité, /api/photo-orientation (Delta VO) exige un jeton
-// Firebase (projet delta-vo OU nacelle-expert). Le serveur n'a pas d'utilisateur
-// connecté : il fabrique un jeton du projet nacelle-expert pour un compte de
-// service technique (custom token → ID token via Identity Toolkit). La clé
-// web ci-dessous est celle du front (publique) ; aucune variable Vercel à ajouter.
-const NE_WEB_API_KEY = "AIzaSyCmo1rTFoy1KnUc1rh_QVMtutwLguKnGb8";
-const UID_SERVEUR = "serveur-nacelle-expert";
-let jetonCache = { token: "", expire: 0 };
-
-async function jetonServeur(admin) {
-  if (jetonCache.token && Date.now() < jetonCache.expire) return jetonCache.token;
-  const custom = await admin.auth().createCustomToken(UID_SERVEUR, { service: "redressement-photos" });
-  const r = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${NE_WEB_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: custom, returnSecureToken: true }),
-    }
-  );
-  const j = await r.json().catch(() => null);
-  if (!r.ok || !j?.idToken) throw new Error("jeton serveur indisponible (" + r.status + ")");
-  // ID token valable 1 h : on le garde 50 min
-  jetonCache = { token: j.idToken, expire: Date.now() + 50 * 60 * 1000 };
-  return j.idToken;
-}
+import { jetonServeur } from "./_jeton-serveur.js";
 
 function remplaceUrl(obj, ancienne, nouvelle) {
   if (obj == null) return obj;
@@ -98,7 +73,7 @@ export async function redresserPhotosDossier(admin, immatRaw, ctxLabel) {
 
   let jeton;
   try {
-    jeton = await jetonServeur(admin);
+    jeton = await jetonServeur(admin, "redressement-photos");
   } catch (e) {
     console.warn(`⚠ redressement ${immat} : ${e?.message || e} — photos laissées telles quelles`);
     return { ok: false, raison: "jeton serveur indisponible", verifiees: 0, redressees: 0, erreurs: liste.length };
