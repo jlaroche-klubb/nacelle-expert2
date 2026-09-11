@@ -66,7 +66,8 @@ export default async function handler(req, res) {
       `</table>` +
       `<p style="margin:14px 0 6px;font-weight:bold;">UN devis global à établir, couvrant ${postes.length > 1 ? "les " + postes.length + " postes suivants" : "le poste suivant"} :</p>` +
       `<ul style="font-size:14px;">${postes.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` +
-      `<p style="margin-top:18px;"><a href="${esc(lien)}" style="background:#1a2a6e;color:#fff;padding:12px 24px;text-decoration:none;font-weight:bold;">✏️ Saisir le devis (photos incluses)</a></p>` +
+      `<p style="margin-top:18px;"><a href="${esc(lien)}" style="background:#1a2a6e;color:#fff;padding:12px 24px;text-decoration:none;font-weight:bold;">📎 Déposer votre devis PDF (photos incluses)</a></p>` +
+      `<p style="font-size:13px;color:#444;margin-top:10px;">Établissez votre devis comme d'habitude, puis déposez le PDF sur cette page : le montant est lu automatiquement, vous vérifiez et validez — rien d'autre à saisir. Les secrétaires Delta Services valident ensuite de leur côté.</p>` +
       `<p style="color:#999;font-size:12px;margin-top:18px;">Lien confidentiel, valable 30 jours, réservé à ce dossier. L'expertise sera transmise au client une fois le devis validé.</p>` +
       `</div>`;
 

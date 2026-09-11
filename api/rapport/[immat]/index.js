@@ -179,6 +179,7 @@ export default async function handler(req, res) {
       <span style="font-size:26px;font-weight:700;">${eur(total)} €</span>
     </div>
     ${valide ? `<div style="font-size:12px;color:#1e7e46;margin-top:8px;">✓ Devis validé${valide.par ? ` par ${esc(valide.par)}` : ""}${valide.date ? ` le ${esc(frDate(valide.date))}` : ""}.</div>` : ""}
+    ${d.devis_pdf && d.devis_pdf.url ? `<div style="font-size:12px;margin-top:6px;"><a href="${esc(d.devis_pdf.url)}" target="_blank" rel="noopener" style="color:#1a2a6e;font-weight:700;">📎 Devis atelier (PDF)${d.devis_pdf.nom ? ` — ${esc(d.devis_pdf.nom)}` : ""}</a></div>` : ""}
     ${retour.note ? `<div style="margin-top:14px;font-size:13px;"><b style="color:#1a2a6e;">Notes de l'expert :</b> ${esc(retour.note)}</div>` : ""}
 
     <div class="no-print" style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
