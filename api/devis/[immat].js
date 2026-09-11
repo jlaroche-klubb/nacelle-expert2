@@ -17,12 +17,13 @@ import { DEFAULT_TARIFS, buildExpertiseResume } from "../_tarifs-defaults.js";
 import { jetonServeur, DELTA_VO_API } from "../_jeton-serveur.js";
 
 // 🧾 DEVIS PDF + LECTURE IA (validé avec Jonathan, 11/09/2026) :
-// Nacelle Assistance ne saisit plus les montants : elle DÉPOSE son devis
-// (PDF ou photo) sur cette page. Le fichier est archivé dans le Storage du
-// dossier, lu par l'IA (fonction Delta VO /api/lire-devis, jeton serveur),
-// et les champs montant / référence sont PRÉ-REMPLIS — modifiables — avant
-// « Valider et transmettre ». La validation finale reste à la secrétaire
-// dans Delta VO, comme avant. Sans lecture possible : saisie manuelle.
+// Nacelle Assistance ne saisit RIEN : elle DÉPOSE son devis (PDF ou photo)
+// sur cette page, c'est tout. Le fichier est archivé dans le Storage du
+// dossier, lu par l'IA (fonction Delta VO /api/lire-devis, jeton serveur) et
+// le montant lu est enregistré avec le drapeau « à vérifier ». La
+// VÉRIFICATION (montant / référence, PDF sous les yeux) et la VALIDATION sont
+// faites par les secrétaires DANS DELTA VO (bouton « Vérifier et valider »).
+// Secours : saisie manuelle du montant sur cette page (sans PDF).
 const BUCKET = "nacelle-expert.firebasestorage.app";
 const MAX_FICHIER_OCTETS = 3_000_000; // ≈ 4 Mo en base64 : sous la limite Vercel (4,5 Mo)
 
@@ -75,7 +76,7 @@ export default async function handler(req, res) {
       if (!pending.length) { res.status(400).json({ error: "Ce dossier n'est plus en attente de devis." }); return; }
 
       // ── Étape 1 : dépôt du fichier + lecture IA (rien n'est écrit sur le devis) ──
-      if (b.action === "lire") {
+      if (b.action === "deposer") {
         const raw = String(b.fichier_base64 || "");
         const m = raw.match(/^data:([^;]+);base64,(.+)$/);
         const mime = (m ? m[1] : String(b.mime || "application/pdf")).toLowerCase();
@@ -114,7 +115,59 @@ export default async function handler(req, res) {
           erreurLecture = e?.message || String(e);
         }
         console.log(`🧾 devis ${immat} : fichier ${nomSur} (${Math.round(octets / 1024)} Ko) · lecture ${lecture ? `${lecture.montant_ht ?? "?"} € HT (${lecture.confiance})` : "échec : " + erreurLecture}`);
-        res.status(200).json({ ok: true, pdf_url: url, nom: nomSur, lecture, erreur_lecture: erreurLecture });
+
+        // ── Enregistrement immédiat : le devis est REÇU, montant « à vérifier »
+        //    par la secrétaire dans Delta VO (0 si l'IA n'a rien lu).
+        const montantLu = lecture && lecture.montant_ht ? Math.round(Number(lecture.montant_ht)) : 0;
+        const referenceLue = lecture && lecture.reference ? String(lecture.reference).slice(0, 80) : "";
+        const dateDepot = new Date().toISOString();
+        const devisRecu = { ...(d.devis_recu || {}) };
+        const restants = pending.filter((id) => !devisRecu[id]);
+        restants.forEach((id, i) => {
+          devisRecu[id] = {
+            montant: i === 0 ? montantLu : 0,
+            inclus: i > 0,
+            global: true,
+            reference: referenceLue,
+            date: dateDepot,
+            label: labelOf(id),
+            source: "pdf_ia",
+          };
+        });
+        const updates = {
+          devis_recu: devisRecu,
+          devis_pending: [],
+          devis_pending_labels: [],
+          devis_complet: true,
+          // 🔎 Montant à contrôler par la secrétaire (Delta VO) avant validation
+          devis_a_verifier: true,
+          devis_pdf: {
+            url,
+            nom: nomSur,
+            date: dateDepot,
+            lecture_ia: montantLu > 0,
+            confiance: lecture ? lecture.confiance || null : null,
+            fournisseur: lecture && lecture.fournisseur ? String(lecture.fournisseur).slice(0, 80) : null,
+            montant_lu: montantLu || null,
+            montant_ttc_lu: lecture && lecture.montant_ttc ? Number(lecture.montant_ttc) : null,
+            immat_detectee: lecture && lecture.immat_detectee ? lecture.immat_detectee : null,
+            note: lecture && lecture.note ? lecture.note : erreurLecture ? "Lecture automatique impossible : " + String(erreurLecture).slice(0, 120) : null,
+            lignes: lecture && Array.isArray(lecture.lignes) ? lecture.lignes.slice(0, 20) : [],
+          },
+          synced_to_delta_vo: false,
+          updatedAt: dateDepot,
+        };
+        const mdMerged = { ...((d.retour && d.retour.montants_devis) || {}) };
+        for (const id of Object.keys(devisRecu)) {
+          mdMerged[id] = Number(devisRecu[id].montant) || 0;
+          updates[`retour.montants_devis.${id}`] = Number(devisRecu[id].montant) || 0;
+        }
+        updates.expertise_resume = buildExpertiseResume(
+          { ...d, devis_recu: devisRecu, retour: { ...(d.retour || {}), montants_devis: mdMerged } },
+          tarifs
+        );
+        await db.collection("dossiers").doc(immat).update(updates);
+        res.status(200).json({ ok: true, nom: nomSur, montant_lu: montantLu || null, reference: referenceLue || null });
         return;
       }
 
@@ -144,18 +197,8 @@ export default async function handler(req, res) {
         updates[`retour.montants_devis.${id}`] = i === 0 ? montantGlobal : 0;
       });
 
-      // 🧾 Devis PDF déposé (archivé à l'étape « lire ») + trace de la lecture IA
-      if (b.pdf_url && /^https:\/\/firebasestorage\.googleapis\.com\//.test(String(b.pdf_url))) {
-        updates.devis_pdf = {
-          url: String(b.pdf_url),
-          nom: String(b.pdf_nom || "devis.pdf").slice(0, 80),
-          date: dateSaisie,
-          lecture_ia: b.lecture_ia === true,
-          confiance: b.confiance ? String(b.confiance).slice(0, 10) : null,
-          fournisseur: b.fournisseur ? String(b.fournisseur).slice(0, 80) : null,
-          montant_lu: Number(b.montant_lu) || null, // ce que l'IA avait lu (contrôle a posteriori)
-        };
-      }
+      // Saisie manuelle (secours, sans PDF) : montant fourni par l'atelier → pas de contrôle IA
+      updates.devis_a_verifier = false;
 
       const resteEnAttente = pending.filter((id) => !devisRecu[id]);
       updates.devis_recu = devisRecu;
@@ -211,24 +254,24 @@ export default async function handler(req, res) {
     }).join("");
     const saisieGlobale = `
       <div style="border:2px solid #1a2a6e;border-radius:8px;padding:16px;margin-bottom:14px;background:#f4f6ff;">
-        <div style="font-weight:700;color:#1a2a6e;margin-bottom:4px;">1 · Déposez votre devis (un seul devis pour l'ensemble des ${pending.length} poste${pending.length > 1 ? "s" : ""} ci-dessus)</div>
-        <div style="font-size:12px;color:#556;margin-bottom:10px;">PDF de votre outil habituel, ou photo du devis. Le montant et la référence sont lus automatiquement — vous vérifiez, puis vous validez.</div>
-        <label id="zone" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;border:2px dashed #8b97c9;border-radius:8px;padding:22px;background:#fff;cursor:pointer;text-align:center;">
-          <div style="font-size:28px;">📎</div>
-          <div style="font-weight:700;color:#1a2a6e;">Cliquez ou glissez votre devis ici</div>
+        <div style="font-weight:700;color:#1a2a6e;margin-bottom:4px;">Déposez votre devis (un seul devis pour l'ensemble des ${pending.length} poste${pending.length > 1 ? "s" : ""} ci-dessus)</div>
+        <div style="font-size:12px;color:#556;margin-bottom:10px;">PDF de votre outil habituel, ou photo du devis. Rien d'autre à faire : Delta Services vérifie et valide de son côté.</div>
+        <label id="zone" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;border:2px dashed #8b97c9;border-radius:8px;padding:26px;background:#fff;cursor:pointer;text-align:center;">
+          <div style="font-size:30px;">📎</div>
+          <div style="font-weight:700;color:#1a2a6e;font-size:16px;">Cliquez ou glissez votre devis ici</div>
           <div style="font-size:12px;color:#889;">PDF, JPG ou PNG · 3 Mo max</div>
           <input type="file" id="fichier" accept="application/pdf,image/jpeg,image/png,image/webp" style="display:none">
         </label>
-        <div id="etatFichier" style="margin-top:8px;font-size:13px;font-weight:700;"></div>
-        <div id="lecture" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;background:#eefaf2;border:1px solid #b5dfc4;font-size:13px;color:#1e5e36;"></div>
-
-        <div style="font-weight:700;color:#1a2a6e;margin:18px 0 8px;">2 · Vérifiez et complétez</div>
-        <div style="display:flex;gap:14px;flex-wrap:wrap;">
-          <label style="font-size:13px;">Montant total € HT *<br><input type="number" min="1" step="1" name="montant_global" style="width:150px;padding:8px;border:1px solid #ccd;border-radius:4px;font-size:16px;font-weight:700;"></label>
+        <div id="etatFichier" style="margin-top:10px;font-size:14px;font-weight:700;"></div>
+      </div>
+      <details id="manuel" style="margin-bottom:14px;">
+        <summary style="cursor:pointer;font-size:13px;color:#556;">Pas de fichier ? Saisir le montant à la main</summary>
+        <div style="border:1px solid #d8dbe6;border-radius:8px;padding:14px;margin-top:8px;background:#fff;display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">
+          <label style="font-size:13px;">Montant total € HT<br><input type="number" min="1" step="1" name="montant_global" style="width:150px;padding:8px;border:1px solid #ccd;border-radius:4px;font-size:16px;font-weight:700;"></label>
           <label style="font-size:13px;">Référence du devis<br><input type="text" name="reference_global" placeholder="DEV-2026-..." style="width:190px;padding:8px;border:1px solid #ccd;border-radius:4px;font-size:15px;"></label>
+          <button type="submit" id="btnValider" style="background:#fff;color:#1a2a6e;border:2px solid #1a2a6e;padding:9px 18px;border-radius:6px;font-size:14px;font-weight:700;cursor:pointer;">Transmettre le montant</button>
         </div>
-        <div style="font-size:12px;color:#889;margin-top:8px;">Sans fichier, vous pouvez aussi saisir le montant directement.</div>
-      </div>`;
+      </details>`;
 
     const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><title>Devis · Nacelle ${esc(immat)}</title></head>
@@ -245,9 +288,8 @@ export default async function handler(req, res) {
       <tr><td style="color:#888;padding:3px 14px 3px 0;">Expert</td><td><b>${esc(expert)}</b></td></tr>
       <tr><td style="color:#888;padding:3px 14px 3px 0;">Client</td><td>${esc(info.client || "—")} (contrat ${esc(info.contrat || "—")})</td></tr>
     </table>
-    <p style="font-size:13px;color:#666;">Établissez UN devis de remise en état couvrant l'ensemble des postes ci-dessous, puis déposez-le : son montant est intégré à l'expertise et transmis aux secrétaires Delta Services pour validation.</p>
+    <p style="font-size:13px;color:#666;">Établissez UN devis de remise en état couvrant l'ensemble des postes ci-dessous, puis déposez-le ci-après. Les secrétaires Delta Services le vérifient et le valident.</p>
     <form id="f">${rows}${saisieGlobale}
-      <button type="submit" id="btnValider" style="background:#1a2a6e;color:#fff;border:none;padding:12px 28px;border-radius:6px;font-size:16px;font-weight:700;cursor:pointer;">✓ Valider et transmettre le devis</button>
       <div id="msg" style="margin-top:12px;font-weight:700;"></div>
     </form>
   </div>
@@ -255,57 +297,37 @@ export default async function handler(req, res) {
 </div>
 <script>
 const CLE = ${JSON.stringify(cle)};
-let fichierDepose = null; // { pdf_url, nom, lecture }
 const zone = document.getElementById("zone");
 const input = document.getElementById("fichier");
 const etat = document.getElementById("etatFichier");
-const bloc = document.getElementById("lecture");
-const champM = document.querySelector('[name="montant_global"]');
-const champR = document.querySelector('[name="reference_global"]');
+const manuel = document.getElementById("manuel");
 const fmt = (n) => Number(n).toLocaleString("fr-FR");
+
+function termine(texte) {
+  etat.style.color = "#1e7e46";
+  etat.innerHTML = texte;
+  zone.style.opacity = "0.45"; zone.style.pointerEvents = "none";
+  if (manuel) manuel.style.display = "none";
+}
 
 async function deposer(file) {
   if (!file) return;
-  if (file.size > ${MAX_FICHIER_OCTETS}) { etat.style.color = "#c0392b"; etat.textContent = "⚠ Fichier trop volumineux (max 3 Mo). Compressez-le ou saisissez le montant à la main."; return; }
-  etat.style.color = "#666"; etat.textContent = "⏳ Envoi et lecture du devis « " + file.name + " »… (quelques secondes)";
-  bloc.style.display = "none";
-  document.getElementById("btnValider").disabled = true;
+  if (file.size > ${MAX_FICHIER_OCTETS}) { etat.style.color = "#c0392b"; etat.textContent = "⚠ Fichier trop volumineux (max 3 Mo). Compressez-le ou saisissez le montant à la main ci-dessous."; return; }
+  etat.style.color = "#666"; etat.textContent = "⏳ Envoi de « " + file.name + " »… quelques secondes.";
+  zone.style.pointerEvents = "none";
   try {
     const b64 = await new Promise((ok, ko) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = ko; fr.readAsDataURL(file); });
     const resp = await fetch(location.pathname, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cle: CLE, action: "lire", fichier_base64: b64, nom: file.name, mime: file.type }),
+      body: JSON.stringify({ cle: CLE, action: "deposer", fichier_base64: b64, nom: file.name, mime: file.type }),
     });
     const j = await resp.json();
     if (!resp.ok) throw new Error(j.error || resp.status);
-    fichierDepose = j;
-    const L = j.lecture;
-    if (L && L.montant_ht) {
-      champM.value = Math.round(L.montant_ht);
-      if (L.reference && !champR.value) champR.value = L.reference;
-      etat.style.color = "#1e7e46"; etat.textContent = "✓ Devis joint : " + j.nom;
-      const lignes = (L.lignes || []).slice(0, 8).map((l) => "<li>" + l.libelle + (l.montant_ht ? " — " + fmt(l.montant_ht) + " € HT" : "") + "</li>").join("");
-      bloc.style.display = "block";
-      bloc.style.background = L.confiance === "haute" ? "#eefaf2" : "#fff7e6";
-      bloc.style.borderColor = L.confiance === "haute" ? "#b5dfc4" : "#f0c37a";
-      bloc.style.color = L.confiance === "haute" ? "#1e5e36" : "#7a4a00";
-      bloc.innerHTML = "<b>🤖 Lu sur votre devis :</b> " + fmt(L.montant_ht) + " € HT" + (L.montant_ttc ? " (" + fmt(L.montant_ttc) + " € TTC)" : "") +
-        (L.reference ? " · réf. " + L.reference : "") + (L.date ? " · " + L.date : "") + (L.fournisseur ? " · " + L.fournisseur : "") +
-        (L.confiance !== "haute" ? "<br><b>⚠ Lecture incertaine</b>" + (L.note ? " — " + L.note : "") + " : vérifiez le montant ci-dessous." : "") +
-        (L.immat_detectee && L.immat_detectee.replace(/[^A-Z0-9]/g, "") !== ${JSON.stringify(immat.replace(/[^A-Z0-9]/g, ""))} ? "<br><b>⚠ Immatriculation lue : " + L.immat_detectee + "</b> — ce devis concerne-t-il bien la nacelle ${esc(immat)} ?" : "") +
-        (lignes ? "<ul style='margin:6px 0 0 16px;padding:0;'>" + lignes + "</ul>" : "") +
-        "<div style='margin-top:6px;'>Vérifiez, corrigez si besoin, puis validez.</div>";
-      champM.focus();
-    } else {
-      etat.style.color = "#b7791f"; etat.textContent = "✓ Devis joint : " + j.nom + " — montant non lisible automatiquement" + (j.erreur_lecture ? "" : "") + " : saisissez le montant total HT ci-dessous.";
-      champM.focus();
-    }
+    termine("✓ Devis « " + j.nom + " » bien reçu — merci ! Delta Services le vérifie et le valide. Vous pouvez fermer cette page.");
   } catch (err) {
-    fichierDepose = null;
-    etat.style.color = "#c0392b"; etat.textContent = "⚠ Échec du dépôt : " + err.message + " — vous pouvez saisir le montant à la main.";
-  } finally {
-    document.getElementById("btnValider").disabled = false;
+    zone.style.pointerEvents = "";
+    etat.style.color = "#c0392b"; etat.textContent = "⚠ Échec du dépôt : " + err.message + " — réessayez ou saisissez le montant à la main ci-dessous.";
   }
 }
 input.addEventListener("change", () => deposer(input.files[0]));
@@ -313,30 +335,26 @@ zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.style.backgr
 zone.addEventListener("dragleave", () => { zone.style.background = "#fff"; });
 zone.addEventListener("drop", (e) => { e.preventDefault(); zone.style.background = "#fff"; deposer(e.dataTransfer.files[0]); });
 
+// Secours : montant saisi à la main (sans fichier)
 document.getElementById("f").addEventListener("submit", async (e) => {
   e.preventDefault();
   const msg = document.getElementById("msg");
-  const m = champM;
-  const r = champR;
-  if (!m || !m.value || Number(m.value) <= 0) { msg.style.color = "#c0392b"; msg.textContent = "Déposez votre devis ou saisissez le montant total HT."; return; }
-  if (!fichierDepose && !window.confirm("Aucun devis joint : transmettre uniquement le montant saisi ?")) return;
+  const m = document.querySelector('[name="montant_global"]');
+  const r = document.querySelector('[name="reference_global"]');
+  if (!m || !m.value || Number(m.value) <= 0) { msg.style.color = "#c0392b"; msg.textContent = "Saisissez le montant total HT du devis."; return; }
   msg.style.color = "#666"; msg.textContent = "⏳ Transmission...";
   try {
-    const L = fichierDepose && fichierDepose.lecture;
     const resp = await fetch(location.pathname, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cle: CLE, montant_global: Number(m.value), reference: r ? r.value : "",
-        pdf_url: fichierDepose ? fichierDepose.pdf_url : null, pdf_nom: fichierDepose ? fichierDepose.nom : null,
-        lecture_ia: !!(L && L.montant_ht), confiance: L ? L.confiance : null, fournisseur: L ? L.fournisseur : null, montant_lu: L ? L.montant_ht : null,
-      }),
+      body: JSON.stringify({ cle: CLE, montant_global: Number(m.value), reference: r ? r.value : "" }),
     });
     const j = await resp.json();
     if (!resp.ok) throw new Error(j.error || resp.status);
     msg.style.color = "#1e7e46";
-    msg.textContent = "✓ Devis transmis — merci ! Les secrétaires Delta Services le valident de leur côté. Vous pouvez fermer cette page.";
+    msg.textContent = "✓ Montant transmis — merci ! Delta Services prend le relais. Vous pouvez fermer cette page.";
     document.querySelectorAll("#f input,#f button").forEach((el) => el.disabled = true);
+    zone.style.opacity = "0.45"; zone.style.pointerEvents = "none";
   } catch (err) {
     msg.style.color = "#c0392b"; msg.textContent = "⚠ Échec : " + err.message;
   }

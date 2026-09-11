@@ -19,6 +19,7 @@
 
 import admin from "firebase-admin";
 import { cleRapport, lienRapport } from "./_auth-role.js";
+import { DEFAULT_TARIFS, buildExpertiseResume } from "./_tarifs-defaults.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -90,6 +91,52 @@ export default async function handler(req, res) {
       return;
     }
 
+    // 🔎 VÉRIFICATION PAR LA SECRÉTAIRE (validé avec Jonathan, 11/09/2026) :
+    // le devis a été DÉPOSÉ en PDF par l'atelier et son montant lu par l'IA
+    // (ou non lu → 0). La secrétaire contrôle avec le PDF sous les yeux et
+    // peut corriger montant / référence ici, dans le même geste que la
+    // validation. Le montant global est porté par le premier poste du devis.
+    const corrections = {};
+    const devisRecu = { ...(d.devis_recu || {}) };
+    const idsGlobal = Object.keys(devisRecu).filter((id) => devisRecu[id] && devisRecu[id].global);
+    const idPorteur = idsGlobal.find((id) => !devisRecu[id].inclus) || idsGlobal[0] || Object.keys(devisRecu)[0];
+    const montantActuel = idPorteur ? Number(devisRecu[idPorteur].montant) || 0 : 0;
+    const montantSaisi = b.montant_global != null && b.montant_global !== "" ? Math.round(Number(b.montant_global)) : null;
+    if (montantSaisi != null && (!Number.isFinite(montantSaisi) || montantSaisi <= 0)) {
+      res.status(400).json({ error: "Montant HT du devis invalide." });
+      return;
+    }
+    if (d.devis_a_verifier && montantSaisi == null && montantActuel <= 0) {
+      res.status(400).json({ error: "Le montant du devis n'a pas pu être lu automatiquement : saisissez le montant HT indiqué sur le PDF." });
+      return;
+    }
+    if (idPorteur && (montantSaisi != null || b.reference != null)) {
+      const nouveauMontant = montantSaisi != null ? montantSaisi : montantActuel;
+      const nouvelleRef = b.reference != null ? String(b.reference).slice(0, 80) : devisRecu[idPorteur].reference || "";
+      for (const id of Object.keys(devisRecu)) {
+        if (!devisRecu[id]) continue;
+        if (id === idPorteur) devisRecu[id] = { ...devisRecu[id], montant: nouveauMontant, reference: nouvelleRef, verifie_par: validePar, verifie_le: new Date().toISOString() };
+        else if (devisRecu[id].global) devisRecu[id] = { ...devisRecu[id], reference: nouvelleRef };
+      }
+      const tarifsSnap = await db.collection("config").doc("tarifs").get();
+      const tarifsCfg = tarifsSnap.exists && Array.isArray(tarifsSnap.data().data) ? tarifsSnap.data().data : [];
+      const tarifs = tarifsCfg.length ? tarifsCfg : DEFAULT_TARIFS;
+      const mdMerged = { ...((d.retour && d.retour.montants_devis) || {}) };
+      for (const id of Object.keys(devisRecu)) {
+        mdMerged[id] = Number(devisRecu[id].montant) || 0;
+        corrections[`retour.montants_devis.${id}`] = Number(devisRecu[id].montant) || 0;
+      }
+      corrections.devis_recu = devisRecu;
+      corrections.expertise_resume = buildExpertiseResume(
+        { ...d, devis_recu: devisRecu, retour: { ...(d.retour || {}), montants_devis: mdMerged } },
+        tarifs
+      );
+      if (montantSaisi != null && montantSaisi !== montantActuel) {
+        console.log(`🔎 valider-devis ${immat} : montant corrigé ${montantActuel} → ${montantSaisi} € HT par ${validePar}`);
+      }
+    }
+    corrections.devis_a_verifier = false;
+
     // ── 3. Envoi du rapport COMPLET au client ──
     const clientEmail = (d.info?.email || "").trim();
     let emailEnvoye = false;
@@ -139,6 +186,7 @@ export default async function handler(req, res) {
 
     // ── 4. Clôture de l'attente ──
     await db.collection("dossiers").doc(immat).update({
+      ...corrections,
       devis_complet: true,
       devis_valide: { par: validePar, email: decoded.email || "", date: new Date().toISOString() },
       synced_to_delta_vo: false, // Delta VO récupère l'état final
