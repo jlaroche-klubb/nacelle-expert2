@@ -20,6 +20,7 @@
 import admin from "firebase-admin";
 import { cleRapport, lienRapport } from "./_auth-role.js";
 import { DEFAULT_TARIFS, buildExpertiseResume } from "./_tarifs-defaults.js";
+import { construireEmailDevis, destinatairesDevis, envoyerBrevo } from "./_devis-email.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -81,6 +82,92 @@ export default async function handler(req, res) {
     const snap = await db.collection("dossiers").doc(immat).get();
     if (!snap.exists) { res.status(404).json({ error: "Dossier introuvable : " + immat }); return; }
     const d = snap.data();
+    const action = String(b.action || "valider");
+    const maintenant = new Date().toISOString();
+
+    // ── 🔔 RELANCER Nacelle Assistance (demande Jonathan, 16/09/2026) ──
+    // Renvoie l'email « Devis à chiffrer » avec le lien de dépôt, marqué
+    // RELANCE ; prolonge la validité du lien ; trace date / auteur.
+    if (action === "relancer") {
+      if (!d.devis_pending?.length) { res.status(400).json({ error: "Ce dossier n'est plus en attente de devis." }); return; }
+      let cle = d.devis_token || "";
+      const updates = { updatedAt: maintenant };
+      if (!cle) {
+        const { randomBytes } = await import("crypto");
+        cle = randomBytes(24).toString("hex");
+        updates.devis_token = cle;
+      }
+      updates.devis_token_created = maintenant; // lien à nouveau valable 30 jours
+      const relances = Array.isArray(d.devis_relances) ? d.devis_relances : [];
+      const tarifsSnap = await db.collection("config").doc("tarifs").get();
+      const tarifsCfg = tarifsSnap.exists && Array.isArray(tarifsSnap.data().data) ? tarifsSnap.data().data : [];
+      const tarifs = tarifsCfg.length ? tarifsCfg : DEFAULT_TARIFS;
+      const labelOf = (id) => (tarifs.find((t) => t.id === id) || {}).label || id;
+      const postes = Array.isArray(d.devis_pending_labels) && d.devis_pending_labels.length ? d.devis_pending_labels : d.devis_pending.map(labelOf);
+      const dateDemande = d.devis_demande?.date || d.retour?.validated_at || d.retour?.date || "";
+      const recipients = await destinatairesDevis(admin);
+      const { html, subject } = construireEmailDevis({
+        immat, cle,
+        type_nacelle: d.info?.type_nacelle, modele: d.info?.modele,
+        lieu_restitution: d.retour?.lieu_restitution, agent: d.retour?.agent,
+        client: d.info?.client, contrat: d.info?.contrat, postes,
+        relance: { numero: relances.length + 1, par: validePar, date_demande: dateDemande ? String(dateDemande).slice(0, 10).split("-").reverse().join("/") : "" },
+      });
+      await envoyerBrevo({ to: recipients, subject, html });
+      updates.devis_relances = [...relances, { date: maintenant, par: validePar, email: decoded.email || "", destinataires: recipients }];
+      updates.synced_to_delta_vo = false; // Delta VO affiche « relancé le … »
+      await db.collection("dossiers").doc(immat).update(updates);
+      console.log(`🔔 relance devis ${immat} n°${relances.length + 1} par ${validePar} → ${recipients.join(", ")}`);
+      res.status(200).json({ ok: true, relances: relances.length + 1, recipients: recipients.length });
+      return;
+    }
+
+    // ── 🚫 ANNULER la demande de devis (société liquidée, client injoignable…) ──
+    // Les postes restent non chiffrés (0 €) ; la facturation est débloquée dans
+    // Delta VO (la secrétaire pourra clore en « Rien à facturer »). Aucun email
+    // client. Trace motif / auteur ; le lien de dépôt est désactivé.
+    if (action === "annuler") {
+      if (!d.devis_pending?.length && !(d.devis_complet && !d.devis_valide)) {
+        res.status(400).json({ error: "Ce dossier n'a pas de demande de devis à annuler." });
+        return;
+      }
+      const motif = String(b.motif || "").slice(0, 200) || "Demande annulée";
+      const pending = Array.isArray(d.devis_pending) ? d.devis_pending : [];
+      const tarifsSnap = await db.collection("config").doc("tarifs").get();
+      const tarifsCfg = tarifsSnap.exists && Array.isArray(tarifsSnap.data().data) ? tarifsSnap.data().data : [];
+      const tarifs = tarifsCfg.length ? tarifsCfg : DEFAULT_TARIFS;
+      const labelOf = (id) => (tarifs.find((t) => t.id === id) || {}).label || id;
+      const devisRecu = { ...(d.devis_recu || {}) };
+      for (const id of pending) {
+        if (!devisRecu[id]) devisRecu[id] = { montant: 0, annule: true, reference: "", date: maintenant, label: labelOf(id) };
+      }
+      const annulation = { par: validePar, email: decoded.email || "", date: maintenant, motif, postes: pending.map(labelOf) };
+      const updates = {
+        devis_recu: devisRecu,
+        devis_pending: [],
+        devis_pending_labels: [],
+        devis_complet: true,
+        devis_a_verifier: false,
+        devis_annule: annulation,
+        devis_valide: { par: validePar, email: decoded.email || "", date: maintenant, annule: true, motif },
+        devis_token: admin.firestore.FieldValue.delete(), // lien de dépôt désactivé
+        synced_to_delta_vo: false,
+        updatedAt: maintenant,
+      };
+      const mdMerged = { ...((d.retour && d.retour.montants_devis) || {}) };
+      for (const id of Object.keys(devisRecu)) {
+        mdMerged[id] = Number(devisRecu[id].montant) || 0;
+        updates[`retour.montants_devis.${id}`] = Number(devisRecu[id].montant) || 0;
+      }
+      updates.expertise_resume = buildExpertiseResume(
+        { ...d, devis_recu: devisRecu, devis_pending: [], retour: { ...(d.retour || {}), montants_devis: mdMerged } },
+        tarifs
+      );
+      await db.collection("dossiers").doc(immat).update(updates);
+      console.log(`🚫 demande de devis ${immat} annulée par ${validePar} : ${motif}`);
+      res.status(200).json({ ok: true, annule: true });
+      return;
+    }
 
     if (d.devis_pending?.length) {
       res.status(400).json({ error: "Le devis atelier n'a pas encore été reçu pour ce dossier." });
