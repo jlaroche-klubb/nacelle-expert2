@@ -2036,10 +2036,16 @@ export default function App() {
     const depFormRempli = Object.fromEntries(
       Object.entries(depForm).filter(([,v]) => v !== "" && v != null)
     );
+    // 🔁 Nouveau cycle : on repart de l'IDENTITÉ de la machine (type, modèle,
+    // année, n° de cube) et du PROCHAIN client poussé par Delta VO — jamais du
+    // client du cycle précédent (il reste dans l'archive et sur son rapport).
+    const identitePrecedente = (({ type_nacelle, modele, annee_fab, numero_cube }) =>
+      Object.fromEntries(Object.entries({ type_nacelle, modele, annee_fab, numero_cube }).filter(([, v]) => v)))(previous?.info || {});
+    const prochainClient = previous?.info_prochain_depart || {};
     const data={
       id:genId(),
       immat:depForm.immat,
-      info:{...(previous?.info||{}), ...depFormRempli, immat:depForm.immat},
+      info:{...identitePrecedente, ...prochainClient, ...depFormRempli, immat:depForm.immat},
       // Le bac "a_trier" n'est jamais sauvegardé : les photos non affectées sont abandonnées (confirmées avant validation)
       depart:{zones:depZones,photos:(()=>{ const {a_trier,...rest}=depPhotos; return rest; })(),tests:depTests,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent,...(signatureInfo?{signature_client:signatureInfo}:{})},
       retour:null,
@@ -2717,8 +2723,14 @@ export default function App() {
                       // (le pré-départ Delta VO vient d'y écrire le NOUVEL acheteur ;
                       // la copie en mémoire peut dater d'avant et montrer l'ancien client)
                       const applyPrefill = (d, fresh) => {
-                        if (!d?.info) return;
-                        const i = d.info;
+                        if (!d?.info && !d?.info_prochain_depart) return;
+                        // 🔁 PROCHAIN DÉPART (Delta VO, 16/09/2026) : quand la machine
+                        // repart alors que son cycle précédent (restitution, frais NE
+                        // impayés) est encore ouvert, Delta VO range le NOUVEAU client
+                        // dans `info_prochain_depart` — le bloc `info` du dossier garde
+                        // le client de la restitution (rapport, facturation). Ici on
+                        // pré-remplit avec le prochain client en priorité.
+                        const i = { ...(d.info || {}), ...(d.info_prochain_depart || {}) };
                         setDepForm(f => f.immat === immat ? ({
                           ...f,
                           client: fresh ? (i.client || f.client || "") : (f.client || i.client || ""),
