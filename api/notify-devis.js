@@ -11,7 +11,8 @@
 // PRÉREQUIS Vercel : FIREBASE_SERVICE_ACCOUNT, BREVO_API_KEY, BREVO_SENDER_EMAIL.
 
 import admin from "firebase-admin";
-import { exigerRole, cleRapport, lienRapport } from "./_auth-role.js";
+import { exigerRole } from "./_auth-role.js";
+import { construireEmailDevis, destinatairesDevis, envoyerBrevo } from "./_devis-email.js";
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -19,15 +20,7 @@ if (!admin.apps.length) {
   });
 }
 
-const DEFAULT_DEVIS_TO = ["jlaroche@klubb.com"]; // ⚠ à remplacer dans Admin → Emails
-const APP_URL = "https://nacelle-expert2.vercel.app";
 
-async function getEmailConfig() {
-  try {
-    const snap = await admin.firestore().collection("config").doc("emails").get();
-    return snap.exists ? snap.data() : {};
-  } catch { return {}; }
-}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Méthode non autorisée" }); return; }
@@ -39,54 +32,25 @@ export default async function handler(req, res) {
     const b = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
     if (!b.immat || !b.cle) { res.status(400).json({ error: "immat / cle manquants" }); return; }
 
-    const apiKey = process.env.BREVO_API_KEY;
-    const senderEmail = process.env.BREVO_SENDER_EMAIL;
-    if (!apiKey || !senderEmail) { res.status(500).json({ error: "Brevo non configuré" }); return; }
-    const senderName = process.env.BREVO_SENDER_NAME || "Nacelle Expert · Delta Services";
-
-    const cfg = await getEmailConfig();
-    const recipients = (Array.isArray(cfg.devis_to) && cfg.devis_to.length) ? cfg.devis_to : DEFAULT_DEVIS_TO;
-
-    const esc = (s) => String(s ?? "—").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
-    const lien = `${APP_URL}/api/devis/${encodeURIComponent(b.immat)}?cle=${encodeURIComponent(b.cle)}`;
-    const postes = Array.isArray(b.postes) ? b.postes : [];
-
-    const row = (label, value, alt) =>
-      `<tr${alt ? ' style="background:#f5f6fa;"' : ""}><td style="padding:6px 10px;color:#666;">${label}</td><td style="padding:6px 10px;">${value}</td></tr>`;
-
-    const html =
-      `<div style="font-family:Arial,sans-serif;max-width:560px;">` +
-      `<h2 style="color:#b3541e;margin-bottom:4px;">⏳ Devis à chiffrer · Nacelle ${esc(b.immat)}</h2>` +
-      `<p style="color:#666;margin-top:0;">Nacelle Expert · Delta Services</p>` +
-      `<table style="border-collapse:collapse;width:100%;font-size:14px;">` +
-      row("Nacelle", `<b>${esc(b.type_nacelle)} ${esc(b.modele)}</b>`) +
-      row("Lieu de stockage", `📍 <b>${esc(b.lieu_restitution)}</b>`, true) +
-      row("Expert", esc(b.agent)) +
-      row("Client", `${esc(b.client)} (contrat ${esc(b.contrat)})`, true) +
-      `</table>` +
-      `<p style="margin:14px 0 6px;font-weight:bold;">UN devis global à établir, couvrant ${postes.length > 1 ? "les " + postes.length + " postes suivants" : "le poste suivant"} :</p>` +
-      `<ul style="font-size:14px;">${postes.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` +
-      `<p style="margin-top:18px;"><a href="${esc(lien)}" style="background:#1a2a6e;color:#fff;padding:12px 24px;text-decoration:none;font-weight:bold;">📎 Déposer votre devis PDF (photos incluses)</a></p>` +
-      `<p style="font-size:13px;color:#444;margin-top:10px;">Établissez votre devis comme d'habitude, puis déposez le PDF sur cette page : le montant est lu automatiquement, vous vérifiez et validez — rien d'autre à saisir. Les secrétaires Delta Services valident ensuite de leur côté.</p>` +
-      `<p style="color:#999;font-size:12px;margin-top:18px;">Lien confidentiel, valable 30 jours, réservé à ce dossier. L'expertise sera transmise au client une fois le devis validé.</p>` +
-      `</div>`;
-
-    const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
-      method: "POST",
-      headers: { "accept": "application/json", "content-type": "application/json", "api-key": apiKey },
-      body: JSON.stringify({
-        sender: { email: senderEmail, name: senderName },
-        to: recipients.map((email) => ({ email })),
-        subject: `⏳ Devis à chiffrer · Nacelle ${b.immat} (${b.lieu_restitution || "?"})`,
-        htmlContent: html,
-      }),
+    const recipients = await destinatairesDevis(admin);
+    const { html, subject } = construireEmailDevis({
+      immat: b.immat, cle: b.cle, type_nacelle: b.type_nacelle, modele: b.modele,
+      lieu_restitution: b.lieu_restitution, agent: b.agent, client: b.client, contrat: b.contrat,
+      postes: Array.isArray(b.postes) ? b.postes : [],
     });
-    if (!resp.ok) {
-      const detail = await resp.text();
-      console.error("Brevo (devis):", resp.status, detail);
-      res.status(502).json({ error: "Envoi Brevo échoué (" + resp.status + ")" });
+    try {
+      await envoyerBrevo({ to: recipients, subject, html });
+    } catch (e) {
+      res.status(502).json({ error: e.message });
       return;
     }
+    // 🧾 Trace de la demande (relances comptées depuis cette date)
+    try {
+      await admin.firestore().collection("dossiers").doc(String(b.immat).toUpperCase().trim()).set(
+        { devis_demande: { date: new Date().toISOString(), par: user.email || "", destinataires: recipients } },
+        { merge: true }
+      );
+    } catch (e) { console.warn("trace devis_demande :", e); }
     res.status(200).json({ ok: true, recipients: recipients.length });
   } catch (e) {
     console.error("notify-devis:", e);

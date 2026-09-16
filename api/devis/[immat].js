@@ -224,6 +224,11 @@ export default async function handler(req, res) {
 
     // ───────────────────────── GET : formulaire ─────────────────────────
     const cle = String(req.query.cle || "");
+    if (d.devis_annule && !(Array.isArray(d.devis_pending) && d.devis_pending.length)) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.status(200).send(`<html><body style="font-family:Arial;padding:40px;text-align:center;"><h2 style="color:#7a7f92;">🚫 Cette demande de devis a été annulée par Delta Services.</h2><p style="color:#666;">Aucun devis n'est attendu pour la nacelle ${esc(immat)}. Vous pouvez fermer cette page.</p></body></html>`);
+      return;
+    }
     const err = checkToken(d, cle);
     if (err) { res.status(403).send(`<html><body style="font-family:Arial;padding:40px;text-align:center;"><h2>⛔ ${esc(err)}</h2></body></html>`); return; }
 
