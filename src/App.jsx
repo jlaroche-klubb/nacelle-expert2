@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { db, auth, googleProvider, storage } from "./firebase";
-import { collection, doc, setDoc, getDocs, deleteDoc, getDoc, updateDoc, query, orderBy, limit, startAfter } from "firebase/firestore";
+import { collection, doc, setDoc, getDocs, deleteDoc, getDoc, updateDoc, query, orderBy, limit, startAfter, where } from "firebase/firestore";
 import { getStorage, ref, uploadString, uploadBytes, getDownloadURL } from "firebase/storage";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import html2pdf from "html2pdf.js";
@@ -1010,6 +1010,38 @@ export default function App() {
   const [loading,setLoading]=useState(true);
   const [searchQ,setSearchQ]=useState("");
   const [filterStatut,setFilterStatut]=useState("tous"); // tous | location | retour | sans_depart
+  // 📅 Filtre par PÉRIODE (demande Jonathan, 28/09/2026) : « qu'est-ce qui a été
+  // restitué entre le 1er et le 28/09 ? ». Interroge le serveur (tous les
+  // dossiers, y compris les cycles archivés et ceux non chargés par la
+  // pagination) sur retour.date ou depart.date.
+  const [periode,setPeriode]=useState({type:"retour",du:"",au:""});
+  const [periodeResultats,setPeriodeResultats]=useState(null); // null = filtre inactif
+  const [periodeLoading,setPeriodeLoading]=useState(false);
+  async function rechercherPeriode(){
+    if(!periode.du||!periode.au){ alert("Renseignez les deux dates."); return; }
+    if(periode.du>periode.au){ alert("La date de début doit précéder la date de fin."); return; }
+    setPeriodeLoading(true);
+    try{
+      const champ = periode.type==="depart" ? "depart.date" : "retour.date";
+      const qy = query(collection(db,"dossiers"), where(champ,">=",periode.du), where(champ,"<=",periode.au));
+      const snap = await getDocs(qy);
+      const rows = snap.docs.map(x=>({ id:x.id, ...x.data() }))
+        .filter(d=>!(periode.type==="depart" && d.depart?.sansDossier)) // « retour sans départ » : pas un vrai départ
+        .sort((a,b)=>String(periode.type==="depart"?b.depart?.date:b.retour?.date).localeCompare(String(periode.type==="depart"?a.depart?.date:a.retour?.date)));
+      setPeriodeResultats(rows);
+    }catch(e){ console.error("Filtre période :",e); alert("Recherche impossible : "+(e?.message||e)); }
+    finally{ setPeriodeLoading(false); }
+  }
+  function exporterPeriodeCsv(){
+    if(!periodeResultats?.length) return;
+    const esc=(v)=>`"${String(v??"").replace(/"/g,'""')}"`;
+    const head=["Immatriculation","Type nacelle","Modèle","Client","Contrat","Date départ","Date retour","Lieu de restitution","Expert","Montant retenue HT (€)","Devis","Cycle"];
+    const lignes=periodeResultats.map(d=>[d.immat,d.info?.type_nacelle,d.info?.modele,d.info?.client,d.info?.contrat,d.depart?.date,d.retour?.date,d.retour?.lieu_restitution,d.retour?.agent||d.depart?.agent,d.expertise_resume?.total_retenue_ht??"",d.devis_pending?.length?"en attente":d.devis_annule?"annulé":d.devis_valide?"validé":d.devis_complet?"reçu":"",d.archived?"archivé":"en cours"].map(esc).join(";"));
+    const csv="\ufeff"+[head.map(esc).join(";"),...lignes].join("\r\n");
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download=`nacelle-expert_${periode.type==="depart"?"departs":"retours"}_${periode.du}_${periode.au}.csv`; a.click(); URL.revokeObjectURL(a.href);
+  }
   const [showStats,setShowStats]=useState(false);
   const [activeDossier,setActiveDossier]=useState(null);
   const [regenAngle,setRegenAngle]=useState(null);    // angle commercial en cours de régénération
@@ -2655,9 +2687,48 @@ export default function App() {
                 </button>
               ))}
             </div>
-            {loading&&filteredDossiers.length===0&&<div style={{textAlign:"center",color:"var(--muted)",padding:40}}>Chargement des dossiers…</div>}
-            {!loading&&filteredDossiers.length===0&&<div style={{textAlign:"center",color:"var(--muted)",padding:32,border:"1px dashed var(--border)",fontSize:13}}>Aucun dossier</div>}
-            {filteredDossiers.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(d=>(
+            {/* 📅 Filtre par période (serveur : tous les dossiers, archives comprises) */}
+            <div className="card" style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap",padding:"10px 12px",marginBottom:12}}>
+              <div style={{fontWeight:700,fontSize:13,alignSelf:"center"}}>📅 Période</div>
+              <div><label style={{fontSize:11}}>Événement</label>
+                <select value={periode.type} onChange={e=>setPeriode({...periode,type:e.target.value})} style={{padding:"6px 8px"}}>
+                  <option value="retour">Retours (restitutions)</option>
+                  <option value="depart">Départs (mises en location)</option>
+                </select></div>
+              <div><label style={{fontSize:11}}>Du</label><input type="date" value={periode.du} onChange={e=>setPeriode({...periode,du:e.target.value})} style={{padding:"6px 8px"}}/></div>
+              <div><label style={{fontSize:11}}>Au</label><input type="date" value={periode.au} onChange={e=>setPeriode({...periode,au:e.target.value})} style={{padding:"6px 8px"}}/></div>
+              <button className="btn btn-primary btn-sm" onClick={rechercherPeriode} disabled={periodeLoading}>{periodeLoading?"⏳":"Rechercher"}</button>
+              {periodeResultats&&<>
+                <button className="btn btn-outline btn-sm" onClick={exporterPeriodeCsv} disabled={!periodeResultats.length}>⬇ Excel (CSV)</button>
+                <button className="btn btn-outline btn-sm" onClick={()=>setPeriodeResultats(null)}>✕ Effacer</button>
+                <div style={{fontSize:12,color:"var(--muted)",alignSelf:"center"}}>
+                  <b>{periodeResultats.length}</b> {periode.type==="depart"?"départ(s)":"retour(s)"} du {periode.du.split("-").reverse().join("/")} au {periode.au.split("-").reverse().join("/")}
+                  {periode.type!=="depart"&&<> · retenue totale <b>{periodeResultats.reduce((t,d)=>t+(Number(d.expertise_resume?.total_retenue_ht)||0),0).toLocaleString("fr-FR")} € HT</b></>}
+                </div>
+              </>}
+            </div>
+            {periodeResultats&&periodeResultats.length===0&&<div style={{textAlign:"center",color:"var(--muted)",padding:32,border:"1px dashed var(--border)",fontSize:13}}>Aucun {periode.type==="depart"?"départ":"retour"} sur cette période</div>}
+            {periodeResultats&&periodeResultats.map(d=>(
+              <div key={d.id} className="dossier-card" style={{marginBottom:6,opacity:d.archived?.85:1}} onClick={()=>{setActiveDossier(d);setView("rapport");}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                  <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap"}}>
+                    <span className="mono" style={{color:"var(--primary)",fontSize:14,fontWeight:700}}>{d.immat}</span>
+                    <span style={{fontSize:13}}>{d.info?.type_nacelle} {d.info?.modele}</span>
+                    <span style={{fontSize:12,color:"var(--muted)"}}>{d.info?.client}{d.info?.contrat?` · ${d.info.contrat}`:""}</span>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                    {d.retour?.lieu_restitution&&<span style={{fontSize:11,color:"var(--muted)"}}>📍 {d.retour.lieu_restitution}</span>}
+                    {(d.retour?.agent||d.depart?.agent)&&<span style={{fontSize:11,color:"var(--muted)"}}>👤 {d.retour?.agent||d.depart?.agent}</span>}
+                    <span style={{fontSize:12,fontWeight:700}}>{periode.type==="depart"?`🚚 ${d.depart?.date||"—"}`:`↩ ${d.retour?.date||"—"}`}</span>
+                    {periode.type!=="depart"&&d.expertise_resume?.total_retenue_ht!=null&&<span className="badge badge-primary">{Number(d.expertise_resume.total_retenue_ht).toLocaleString("fr-FR")} € HT</span>}
+                    {d.archived&&<span className="badge" style={{background:"#eee",color:"#666"}}>cycle archivé</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {!periodeResultats&&loading&&filteredDossiers.length===0&&<div style={{textAlign:"center",color:"var(--muted)",padding:40}}>Chargement des dossiers…</div>}
+            {!periodeResultats&&!loading&&filteredDossiers.length===0&&<div style={{textAlign:"center",color:"var(--muted)",padding:32,border:"1px dashed var(--border)",fontSize:13}}>Aucun dossier</div>}
+            {!periodeResultats&&filteredDossiers.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(d=>(
               <div key={d.immat} className="dossier-card" style={{marginBottom:6}} onClick={async()=>{
                 // 🔄 Affichage immédiat PUIS relecture FRAÎCHE du serveur : sans ça,
                 // un rapport ouvert depuis une page restée chargée montrait la version
@@ -2681,7 +2752,7 @@ export default function App() {
               </div>
             ))}
             {/* Pagination : les dossiers plus anciens se chargent à la demande */}
-            {hasMoreDossiers && (
+            {!periodeResultats && hasMoreDossiers && (
               <div style={{textAlign:"center",marginTop:12}}>
                 <button className="btn btn-outline" onClick={loadMoreDossiers} disabled={loadingMore}>
                   {loadingMore ? "⏳ Chargement..." : "Voir plus de dossiers ↓"}
