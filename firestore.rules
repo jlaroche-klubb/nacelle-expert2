@@ -1,0 +1,95 @@
+// ============================================================
+// RÈGLES FIRESTORE — projet Firebase « nacelle-expert »
+// ============================================================
+// ⚠ Ce fichier est une COPIE VERSIONNÉE des règles publiées dans la console
+// Firebase (Firestore Database → Règles). La console reste la source active :
+// toute modification doit être collée ET publiée là-bas. Gardez les deux en
+// phase (dernière mise à jour : 06/10/2026, ajout des clés pré-départ /
+// synchro écrites par Delta VO — bug GN-610-XG).
+//
+// Principe : Nacelle Expert (utilisateurs connectés) écrit tout ; Delta VO
+// (non authentifié, même origine Firebase) ne peut toucher qu'une liste
+// blanche de champs administratifs — jamais les expertises.
+// ============================================================
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return request.auth != null &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    // Clés que la synchro Delta VO (non authentifiée) a le droit de toucher :
+    // infos administratives, pré-départ, marqueurs de synchro et du rapport —
+    // jamais depart / retour / photos / devis.
+    //  - info, immat, createdAt, infos_admin_*  : pré-création / correction ADV (nacelleExpertPushService)
+    //  - info_prochain_depart                   : pré-départ location (pushProchainDepartToNacelleExpert)
+    //  - synced_to_delta_vo, sync_lock, sync_error : synchro NE → VO (useNacelleExpertSync)
+    //  - rapport_token, rapport_token_created   : lien sécurisé du rapport ouvert depuis Delta VO
+    //  - archived, renamed_to, renamed_at       : correction d'immatriculation (ancien dossier)
+    function isDeltaVoAdminKeys(keys) {
+      return keys.hasOnly(['immat', 'info', 'infos_admin_source',
+                           'infos_admin_updatedAt', 'createdAt',
+                           'synced_to_delta_vo', 'sync_lock', 'sync_error',
+                           'info_prochain_depart',
+                           'rapport_token', 'rapport_token_created',
+                           'archived', 'renamed_to', 'renamed_at']);
+    }
+
+    // Users collection - active users with UID
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null &&
+                       (isAdmin() || request.auth.uid == userId);
+      allow update, delete: if isAdmin();
+    }
+
+    // Pending users - waiting for first login
+    match /pending_users/{emailId} {
+      allow read: if request.auth != null;
+      allow create, update: if isAdmin();
+      allow delete: if request.auth != null;
+    }
+
+    // Dossiers
+    // - Lecture publique (pour permettre à Delta VO de lire)
+    // - Création : authentifiée, OU pré-création Delta VO limitée aux infos admin
+    // - Modification : authentifiée, OU Delta VO limité aux infos admin + marqueurs
+    // - Suppression : authentifiée uniquement
+    match /dossiers/{dossierId} {
+      allow read: if true;
+      allow create: if request.auth != null ||
+                       isDeltaVoAdminKeys(request.resource.data.keys());
+      allow update: if request.auth != null ||
+                       isDeltaVoAdminKeys(request.resource.data.diff(resource.data).affectedKeys());
+      allow delete: if request.auth != null;
+    }
+
+    // Photos de ventes - prises dans Nacelle Expert (authentifié),
+    // lues par Delta VO (non authentifié)
+    match /photos_ventes/{immat} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Liens courts des rapports (état départ / restitution)
+    match /rapports_links/{immat} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Anciennes expertises - lecture Delta VO (montants d'expertise)
+    match /expertises/{id} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Config (zones, tarifs) - lecture/écriture pour admins uniquement
+    match /config/{doc} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+  }
+}
