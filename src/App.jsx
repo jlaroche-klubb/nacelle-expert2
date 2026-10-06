@@ -1063,6 +1063,32 @@ export default function App() {
   const [depTests,setDepTests]=useState({});
   const [depZones,setDepZones]=useState({});
   const [depPhotos,setDepPhotos]=useState({});
+  // 🔁 REPRISE DE L'ÉTAT DU DERNIER RETOUR (demande Jonathan, 06/10/2026 — cas GN-610-XG) :
+  // quand une nacelle repart, son état de départ EST l'état constaté à sa dernière
+  // restitution (zones, tests, photos, compteurs). On le recharge donc dans le
+  // formulaire de départ, tout reste modifiable, et le départ garde la trace.
+  const [depReprise,setDepReprise]=useState(null); // { date, agent, heures, km, nbPhotos, immat } ou null
+  const depRepriseFaite = useRef(""); // immat pour laquelle la reprise a déjà été proposée/appliquée
+  function reprendreEtatRetour(d) {
+    const r = d?.retour; if (!r) return;
+    const { a_trier, ...photosRetour } = r.photos || {};
+    // Les photos des dégâts chiffrés du retour deviennent des photos supplémentaires du départ
+    const photos = {};
+    for (const [k, arr] of Object.entries(photosRetour)) {
+      if (!Array.isArray(arr) || !arr.length) continue;
+      if (k.startsWith("degat_")) photos.photos_supplementaires = [...(photos.photos_supplementaires||[]), ...arr];
+      else photos[k] = [...(photos[k]||[]), ...arr];
+    }
+    setDepZones(JSON.parse(JSON.stringify(r.zones || {})));
+    setDepTests(JSON.parse(JSON.stringify(r.tests || {})));
+    setDepPhotos(photos);
+    setDepForm(f => ({ ...f, heures: f.heures || r.heures || "", km_porteur: f.km_porteur || r.km_porteur || "" }));
+    const nbPhotos = Object.values(photos).reduce((n, a) => n + a.length, 0) + Object.values(r.zones||{}).reduce((n, z) => n + (Array.isArray(z?.photos) ? z.photos.length : 0), 0);
+    setDepReprise({ immat: d.immat, date: r.date || "", agent: r.agent || "", heures: r.heures || "", km: r.km_porteur || "", nbPhotos, nbDegats: (r.degats||[]).length });
+  }
+  function repartirDeZero() {
+    setDepZones({}); setDepTests({}); setDepPhotos({}); setDepReprise(null);
+  }
   const [depStep,setDepStep]=useState(0);
   const [openZone,setOpenZone]=useState(null);
   const [depEmailSending,setDepEmailSending]=useState(false);
@@ -1124,6 +1150,8 @@ export default function App() {
       setDepZones(draft.data.depZones || {});
       setDepTests(draft.data.depTests || {});
       setDepPhotos(draft.data.depPhotos || {});
+      setDepReprise(draft.data.depReprise || null);
+      if (draft.data.depReprise?.immat) depRepriseFaite.current = draft.data.depReprise.immat;
       setDepStep(draft.data.depStep || 1);
       setDepSignature(draft.data.depSignature || null);
       setView("depart");
@@ -1253,9 +1281,9 @@ export default function App() {
   // Auto-save DÉPART (brouillon)
   useEffect(()=>{
     if(view==="depart" && depStep > 0) {
-      saveDraft("depart", { depForm, depZones, depTests, depPhotos, depStep, depSignature });
+      saveDraft("depart", { depForm, depZones, depTests, depPhotos, depStep, depSignature, depReprise });
     }
-  },[view, depForm, depZones, depTests, depPhotos, depStep, depSignature]);
+  },[view, depForm, depZones, depTests, depPhotos, depStep, depSignature, depReprise]);
 
   // Auto-save RETOUR (brouillon)
   useEffect(()=>{
@@ -2079,7 +2107,7 @@ export default function App() {
       immat:depForm.immat,
       info:{...identitePrecedente, ...prochainClient, ...depFormRempli, immat:depForm.immat},
       // Le bac "a_trier" n'est jamais sauvegardé : les photos non affectées sont abandonnées (confirmées avant validation)
-      depart:{zones:depZones,photos:(()=>{ const {a_trier,...rest}=depPhotos; return rest; })(),tests:depTests,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent,...(signatureInfo?{signature_client:signatureInfo}:{})},
+      depart:{zones:depZones,photos:(()=>{ const {a_trier,...rest}=depPhotos; return rest; })(),tests:depTests,date:depForm.date,heures:depForm.heures,km_porteur:depForm.km_porteur,agent:depForm.agent,...(signatureInfo?{signature_client:signatureInfo}:{}),...(depReprise&&depReprise.immat===depForm.immat?{repris_du_retour:{date:depReprise.date,agent:depReprise.agent,heures:depReprise.heures,km_porteur:depReprise.km}}:{})},
       retour:null,
       // 🚚 Sécurité départ : Delta VO détecte ce dossier (départ seul)
       // et fait suivre la machine (prête / louée LLD) — jamais de restitution.
@@ -2581,7 +2609,7 @@ export default function App() {
           {view==="home"&&<>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("ventes");setActiveDossier(null);setVenteImmat("");setVenteSearchDone(false);setVentePhotosLibres({});}}>📷 Photos de ventes</button>
             <button className="btn btn-outline btn-sm" style={{color:"#fff",borderColor:"rgba(255,255,255,.4)"}} onClick={()=>{setView("retour");setRetStep(0);setFoundDossier(null);setSearchImmat("");setSearchDone(false);}}>Expertise Retour</button>
-            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});setDepSignature(null);}}>+ Nouveau départ</button>
+            <button className="btn btn-accent btn-sm" onClick={()=>{setView("depart");setDepStep(0);setDepForm({immat:"",numero_cube:"",type_nacelle:"",modele:"",annee_fab:"",client:"",contrat:"",email:"",date:todayISO(),heures:"",km_porteur:"",agent:userProfile ? `${userProfile.prenom} ${userProfile.nom}` : ""});setDepZones({});setDepTests({});setDepPhotos({});setDepSignature(null);setDepReprise(null);depRepriseFaite.current="";}}>+ Nouveau départ</button>
           </>}
           <button className="btn btn-icon no-print" style={{color:"#fff",borderColor:"rgba(255,255,255,.3)"}} onClick={handleLogout} title="Déconnexion">🚪</button>
         </div>
@@ -2819,6 +2847,14 @@ export default function App() {
                       if (/^[A-Z]{2}-[0-9]{3}-[A-Z]{2}$/.test(immat)) fetchDossier(immat, true).then(d => {
                         if (!d) return;
                         applyPrefill(d, true);
+                        // 🔁 Cycle précédent complet (départ + retour) : l'état constaté au
+                        // retour devient l'état de départ proposé — une seule fois par immat,
+                        // et jamais par-dessus une saisie déjà commencée.
+                        if (d.retour && depRepriseFaite.current !== immat
+                            && !Object.keys(depZones).length && !Object.keys(depPhotos).length && !Object.keys(depTests).length) {
+                          depRepriseFaite.current = immat;
+                          reprendreEtatRetour(d);
+                        }
                       });
                     }} placeholder="AB-123-CD"/></div>
                     <div><label>Type nacelle</label><TypeNacelleSelect value={depForm.type_nacelle} onChange={v=>setDepForm({...depForm,type_nacelle:v})} types={typesNacelle}/></div>
@@ -2841,6 +2877,20 @@ export default function App() {
                     <div><label>Agent expert</label><input value={depForm.agent} onChange={e=>setDepForm({...depForm,agent:e.target.value})} placeholder="Prénom Nom"/></div>
                   </div>
                 </div>
+                {depReprise&&depReprise.immat===depForm.immat&&(
+                  <div className="card" style={{marginBottom:14,border:"1px solid #c9a227",background:"#fffbea"}}>
+                    <div style={{fontSize:11,letterSpacing:2,color:"#8a6d00",textTransform:"uppercase",fontWeight:700,marginBottom:6}}>🔁 État repris de la dernière restitution</div>
+                    <div style={{fontSize:13,color:"#5a4800",lineHeight:1.5}}>
+                      Expertise retour du <b>{depReprise.date?depReprise.date.split("-").reverse().join("/"):"—"}</b>{depReprise.agent?<> par <b>{depReprise.agent}</b></>:null}
+                      {depReprise.heures?<> · {depReprise.heures} h</>:null}{depReprise.km?<> · {Number(depReprise.km).toLocaleString("fr-FR")} km</>:null}
+                      {" "}· {depReprise.nbPhotos} photo{depReprise.nbPhotos>1?"s":""}{depReprise.nbDegats?<> · {depReprise.nbDegats} dégât{depReprise.nbDegats>1?"s":""} chiffré{depReprise.nbDegats>1?"s":""}</>:null}.
+                      <br/>Zones, tests, photos et compteurs sont pré-remplis avec cet état : <b>vérifiez et modifiez ce qui a changé</b> (réparations, nouvelles photos) aux étapes suivantes.
+                    </div>
+                    <div style={{marginTop:10}}>
+                      <button className="btn btn-outline btn-sm" onClick={()=>{ if(window.confirm("Repartir d'un départ vide ? Les zones, tests et photos repris du retour seront retirés du formulaire.")) repartirDeZero(); }}>Repartir de zéro</button>
+                    </div>
+                  </div>
+                )}
                 <div style={{display:"flex",justifyContent:"space-between"}}>
                   <button className="btn btn-outline" onClick={goHome}>← Annuler</button>
                   <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
