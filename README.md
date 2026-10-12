@@ -74,3 +74,5 @@ export default defineConfig([
 
 <!-- redeploy 2026-07-31 -->
 
+
+<!-- Redéploiement du 12/10/2026 : le déploiement Vercel du merge #58 a échoué (git_info_fail, côté Vercel/GitHub, pas le code). Ce commit vide de sens relance la production. -->
