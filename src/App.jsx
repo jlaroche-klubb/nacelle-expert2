@@ -268,6 +268,49 @@ async function generateAndUploadRetourPdf(element, immat) {
 // Pourquoi : les URLs Firebase brutes contiennent un token avec des caractères '='
 // que certaines messageries corrompent (encodage quoted-printable) → lien mort.
 // Le lien court, sans '=', passe par une redirection Vercel vers le bon rapport.
+// 📧 ENVOI DU RAPPORT AU CLIENT DEPUIS LE SERVEUR (demande Jonathan, 12/10/2026).
+// Remplace le lien mailto: (qui ouvrait Outlook sur le poste de l'expert et disait
+// « restitution » même pour un départ). Le type est déduit du dossier :
+//   - retour présent → rapport de restitution (/api/notify-retour-client ; provisoire
+//     si des postes attendent un devis)
+//   - départ seul    → état de départ (/api/notify-depart), page publiée au passage
+// Envoi via Brevo, copie assistanat commerce (config Admin → Emails).
+async function envoyerRapportClient(dossier, emailTo) {
+  const email = String(emailTo || dossier?.info?.email || "").trim();
+  if (!dossier?.immat) return false;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { alert("⚠ Email client manquant ou invalide sur ce dossier."); return false; }
+  const isDepart = !dossier.retour;
+  const libelle = isDepart ? "l'état de départ" : "le rapport de restitution";
+  if (!window.confirm(`Envoyer ${libelle} de ${dossier.immat} à ${email} (copie assistanat commerce) ?`)) return false;
+  try {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error("utilisateur non authentifié");
+    const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + token };
+    let resp;
+    if (isDepart) {
+      // Publie la page affichée comme état de départ (cible de /api/rapport/{immat}/depart)
+      try {
+        const htmlContent = captureCurrentPageHTML();
+        const reportUrl = await uploadReportToStorage(htmlContent, dossier.immat, "depart");
+        await setDoc(doc(db, "rapports_links", dossier.immat), { depart_url: reportUrl, updatedAt: new Date().toISOString() }, { merge: true });
+      } catch (e) { console.warn("Publication état de départ :", e); }
+      resp = await fetch("/api/notify-depart", { method: "POST", headers,
+        body: JSON.stringify({ immat: dossier.immat, email_client: email, modele: dossier.info?.modele || "", type_nacelle: dossier.info?.type_nacelle || "" }) });
+    } else {
+      const nbAttente = (dossier.devis_pending || []).length;
+      resp = await fetch("/api/notify-retour-client", { method: "POST", headers,
+        body: JSON.stringify({ immat: dossier.immat, email_client: email, modele: dossier.info?.modele || "", type_nacelle: dossier.info?.type_nacelle || "", provisoire: nbAttente > 0, nb_attente: nbAttente }) });
+    }
+    if (!resp.ok) { const t = await resp.json().catch(() => ({})); throw new Error(t.error || ("HTTP " + resp.status)); }
+    alert(`📧 ${libelle.charAt(0).toUpperCase() + libelle.slice(1)} envoyé à ${email} (copie assistanat commerce)`);
+    return true;
+  } catch (e) {
+    console.error("Envoi rapport client :", e);
+    alert("⚠ L'envoi a échoué : " + e.message + "\n\nRéessayez dans un instant.");
+    return false;
+  }
+}
+
 async function openEmailClient(emailTo, immat, reportType = "depart", dossier = null) {
   const isDepart = reportType === "depart";
   const subject = isDepart
@@ -3784,9 +3827,7 @@ export default function App() {
                 <div style={{display:"flex",justifyContent:"space-between",gap:10}}>
                   <button className="btn btn-outline" onClick={()=>setRetStep(1)}>← Modifier</button>
                   <button className="btn btn-outline btn-sm no-print" onClick={()=>window.print()}>⬇ PDF</button>
-                  {emailClient && (
-                    <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(emailClient, foundDossier.immat, "retour", foundDossier)}>📧 Email</button>
-                  )}
+                  {/* 📧 L'envoi au client se fait depuis le rapport une fois l'expertise validée (bouton « Envoyer le rapport ») */}
                   <button className="btn btn-gold" disabled={uploadingCount > 0 || savingRetour} onClick={async()=>{
                     setSavingRetour(true);
                     try {
@@ -3825,7 +3866,7 @@ export default function App() {
                 )}
                 <button className="btn btn-outline btn-sm no-print" onClick={()=>window.print()}>⬇ PDF</button>
                 {activeDossier.info?.email && (
-                  <button className="btn btn-blue btn-sm no-print" onClick={()=>openEmailClient(activeDossier.info.email, activeDossier.immat, "retour", activeDossier)}>📧 Email</button>
+                  <button className="btn btn-blue btn-sm no-print" title={activeDossier.retour?"Envoyer le rapport de restitution au client (email serveur)":"Envoyer l'état de départ au client (email serveur)"} onClick={()=>envoyerRapportClient(activeDossier)}>📧 {activeDossier.retour?"Envoyer le rapport":"Envoyer l'état de départ"}</button>
                 )}
               </div>
             </div>
